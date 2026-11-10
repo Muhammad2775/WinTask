@@ -1,285 +1,247 @@
 # WinTask — Test Case Specification & Execution Record
 
-**Document type:** Test case specification and execution record  
-**Project:** WinTask  
-**Document version:** 0.1 — Proof-of-Concept baseline  
-**Status:** Test cases specified; execution pending  
-**Target:** Windows x64, Clang 23.1.5 + MSVC STL, Visual Studio 2026 Build Tools
-
-> **Execution-status rule:** All test cases begin as `NOT RUN`. Do not change a status to `PASS` until the test has actually been executed and its evidence recorded. This document contains expected outcomes, not fabricated test results.
+**Project:** WinTask — High-Performance Priority-Based Task Scheduler & Processor for Windows  
+**Document version:** 0.2 — Revised 40-case Proof-of-Concept baseline  
+**Status:** Prepared for execution; all tests are initially NOT RUN  
+**Academic context:** Semester 5 — Operating Systems (Lab Project)  
+**Platform:** Windows x64  
+**Primary toolchain:** Clang 23.1.5, `x86_64-pc-windows-msvc`, MSVC STL, Microsoft Build Tools for Visual Studio 2026  
+**Companion document:** Design & Specification Document.md
 
 ---
 
 ## 1. Purpose
 
-This document defines the validation and benchmark cases for WinTask. It is used to verify the 32-byte request representation, three priority-separated SPSC queues, atomic publication/reclamation, worker behavior, load shedding, application-level file authorization, diagnostics and throughput/latency measurement.
+This document defines the consolidated validation and benchmark cases for WinTask. It is the execution record for determining whether the implementation conforms to the approved design and for recording measured performance.
 
-`WinTaskValidator.cpp` executes correctness and integration tests. `WinTaskBenchmark.cpp` executes end-to-end workload and performance tests and generates `BenchmarkResults.csv` after the run has drained.
+The suite contains **exactly 40 test cases** grouped by subsystem. A test case may contain several related assertions or parameterized sub-runs where they verify the same system property. Consolidation reduces administrative duplication; it does not remove the distinct correctness conditions that the case is intended to establish.
+
+The test suite covers request layout, configuration, ingestion, SPSC queue behavior, concurrency, lifecycle, load shedding, the three synthetic job handlers, urgency semantics, processor affinity, diagnostics, CSV output and performance.
+
+
+---
 
 ## 2. Test environment record
 
-Complete this section for each formal test campaign.
+Complete this section before recording final results. The environment should remain consistent across comparative benchmark runs.
 
-| Environment item | Actual value |
+| Item | Recorded value |
 |---|---|
-| CPU model | i5-10400F/10600KF |
-| Physical core / logical processor topology |6C/12T (Hyper-Threading) |
-| Windows edition and build | Windows 11 Pro Build 22H2 22621.4317 |
-| Clang version | Clang 23.1.5 (planned) |
-| Target triple | `x86_64-pc-windows-msvc` (planned) |
-| MSVC STL version | Latest |
-| Visual Studio Build Tools version | Visual Studio 2026 Build Tools |
-| Windows SDK version | 10.0.28000.0 |
-| Build configuration | Release for performance; Debug/instrumented for correctness where applicable |
-| AVX2 enabled | Yes |
-| Ingestor affinity | Processor/core 0 (project-machine mapping) |
-| High consumer affinity | Processor/core 2 (project-machine mapping) |
-| Medium consumer affinity | Processor/core 4 (project-machine mapping) |
-| Low consumer affinity | Processor/core 6 (project-machine mapping) |
-| Queue capacities | High 262,144; Medium 524,288; Low 524,288 |
-| Queue storage | 40 MiB total |
-| Benchmark result file | `BenchmarkResults.csv` |
-
-The processor identifiers above are the project-machine mapping selected by the user. Record the actual mapping used in the run; do not silently substitute another mapping.
+| CPU model | NOT RECORDED |
+| Physical core count | NOT RECORDED |
+| Logical processor count | NOT RECORDED |
+| RAM configuration | NOT RECORDED |
+| Windows edition/build | NOT RECORDED |
+| Compiler version | Clang 23.1.5 (verify actual installed build) |
+| Compiler target | `x86_64-pc-windows-msvc` |
+| Standard library | MSVC STL |
+| Build tools | Microsoft Build Tools for Visual Studio 2026 |
+| Language mode | C++20 baseline; C++23 only where explicitly enabled |
+| Build configuration | Release for performance; validation configuration recorded separately |
+| AVX2 availability | NOT VERIFIED |
+| 64-bit atomic lock-free result | NOT VERIFIED |
+| QPC frequency | NOT RECORDED |
+| Processor-affinity mapping | Ingestor 0; High 2; Medium 4; Low 6 (verify during test run) |
+| Source revision | NOT RECORDED |
+| Test date/time | NOT RECORDED |
 
 ---
 
 ## 3. Test strategy
 
-### 3.1 Validation layers
+### 3.1 Test groups
 
-1. **Compile-time validation:** structure sizes, offsets, type properties, queue-capacity powers of two, masks and atomic lock-free assumptions.
-2. **Deterministic unit tests:** routing, ring-buffer empty/full behavior, FIFO order, wraparound, state transitions and policy decisions.
-3. **Concurrent stress tests:** producer/consumer publication, no overwrite, no duplicates, no loss of accepted jobs and diagnostics isolation.
-4. **Integration tests:** job handlers, file/folder authorization, graceful drain/shutdown and CSV output.
-5. **Performance tests:** sustained submission, completed throughput, end-to-end latency, queue saturation and load-shedding accounting.
+| Group | Coverage | Test IDs | Count |
+|---|---|---:|---:|
+| A | Structure and configuration | TC-001–TC-004 | 4 |
+| B | Request ingestion and data integrity | TC-005–TC-008 | 4 |
+| C | SPSC queue correctness | TC-009–TC-016 | 8 |
+| D | Concurrency and lifecycle | TC-017–TC-020 | 4 |
+| E | Load shedding and accounting | TC-021–TC-024 | 4 |
+| F | Job handlers and request semantics | TC-025–TC-032 | 8 |
+| G | Windows platform and diagnostics | TC-033–TC-035 | 3 |
+| H | Performance and scalability | TC-036–TC-040 | 5 |
+| **Total** | | **TC-001–TC-040** | **40** |
 
-### 3.2 Test-run rules
+### 3.2 Execution rules
 
-- Correctness tests and optimized performance measurements must be reported separately.
-- Allocate queue storage and diagnostics arrays before the timed interval.
-- Create and pin worker threads and perform warm-up before starting the measured interval.
-- Use a unique `job_id` per request within a benchmark run.
-- Use the same workload and request distribution when comparing variants.
-- Do not include CSV serialization or CSV disk output in the measured request-processing interval.
-- Do not use artificial sleeps in the primary throughput benchmark.
-- Allow the run to drain all accepted work before calculating final completed throughput.
-- Record offered, accepted, successfully completed, failed and capacity-rejected counts.
-- Never report offered or accepted requests as completed throughput.
-- Preserve the generated CSV and console summary as execution evidence.
+- Structural and deterministic correctness cases should pass before high-volume benchmark runs begin.
+- Concurrency cases shall use unique request IDs or another independent sequence-integrity method so loss, duplication and corruption can be detected.
+- A test that exercises all three queues shall verify each queue independently as well as aggregate results.
+- Queue-full behavior shall be tested without relying on timing luck; controlled fill/drain conditions shall be used.
+- Performance tests shall use an optimized Release build, a recorded affinity mapping, a defined workload and a measured interval.
+- Comparative tests shall use the same input sequence and workload settings for each compared method.
+- CSV export shall occur after accepted work has drained and consumer threads have terminated.
+- A failed correctness precondition invalidates dependent performance results; a benchmark must not be reported as successful if requests are silently lost or accounting does not reconcile.
+- Optional experiments that are not part of the baseline 40 cases shall be clearly labelled exploratory and shall not replace a required case.
 
 ### 3.3 Status vocabulary
 
 | Status | Meaning |
 |---|---|
-| NOT RUN | Test has not been executed. |
-| PASS | Actual result matches the expected result and evidence is recorded. |
-| FAIL | Actual result does not match expected behavior. |
-| BLOCKED | Test cannot be run because a documented prerequisite is unavailable. |
-| NOT APPLICABLE | Test is intentionally excluded from the current POC, with reason recorded. |
+| NOT RUN | No execution has been recorded. |
+| PASS | All expected results for the case were observed. |
+| FAIL | One or more expected results were not observed. |
+| BLOCKED | The case could not be run because a required prerequisite was unavailable. |
+| INVALID | The run occurred, but the environment or execution conditions make its result unusable. |
 
 ---
 
-## 4. Compile-time and structural test cases
+## 4. Group A — Structure and configuration (4 tests)
 
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-001 | Descriptor size | Build the layout assertions for `JobDescriptor`. | `sizeof(JobDescriptor) == 16`. | NOT RUN |
-| TC-002 | Payload size | Build the layout assertions for `JobPayload`. | `sizeof(JobPayload) == 16`. | NOT RUN |
-| TC-003 | Queue slot size | Build the layout assertions for `QueueSlot`. | `sizeof(QueueSlot) == 32`. | NOT RUN |
-| TC-004 | Field offsets | Evaluate all specified `offsetof` assertions. | Descriptor and payload offsets match the Design & Specification Document. | NOT RUN |
-| TC-005 | Trivially-copyable property | Compile `std::is_trivially_copyable_v<QueueSlot>` assertion. | Assertion succeeds. | NOT RUN |
-| TC-006 | Queue capacity/mask | Compile-time check all capacities are powers of two and masks equal capacity minus one. | High: `0x0003FFFF`; Medium/Low: `0x0007FFFF`. | NOT RUN |
-| TC-007 | Queue storage alignment | Allocate each queue and inspect the base address and slot addresses. | Base is 64-byte aligned; each 32-byte slot address is 32-byte aligned. | NOT RUN |
-| TC-008 | Atomic property | Check the target build's 64-bit atomic lock-free property. | Property is verified; any failure is disclosed and the lock-free claim is removed. | NOT RUN |
+| TC-001 | Request structure validation | Verify descriptor, payload and combined slot sizes; member offsets; descriptor/payload ordering; and trivially transferable request representation. | Descriptor is 16 bytes, payload is 16 bytes, slot is exactly 32 bytes, and all documented offsets match. | NOT RUN |
+| TC-002 | Queue configuration validation | Verify all three configured capacities, power-of-two properties, masks, total slot count and calculated queue-storage footprint. | High is 262,144 slots; Medium and Low are 524,288 each; aggregate capacity is 1,310,720 slots and queue storage is 40 MiB. | NOT RUN |
+| TC-003 | Queue and control alignment | Inspect queue backing-store base alignment, slot stride/alignment, and independent cache-line placement of head and tail controls. | Queue base is 64-byte aligned, slots retain a 32-byte stride, and head/tail controls do not share a cache line. | NOT RUN |
+| TC-004 | Atomic and SIMD capability checks | Verify the target's 64-bit atomic lock-free property and AVX2 availability required by the configured build path. | Results are recorded explicitly. A non-lock-free counter implementation is not described as lock-free; unsupported AVX2 execution is not attempted. | NOT RUN |
 
 ---
 
-## 5. Routing and request-data tests
+## 5. Group B — Request ingestion and data integrity (4 tests)
 
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-009 | Low routing | Submit valid jobs with severity 1 and 2. | All are published only to Low. | NOT RUN |
-| TC-010 | Medium routing | Submit valid jobs with severity 3 and 4. | All are published only to Medium. | NOT RUN |
-| TC-011 | High routing | Submit valid jobs with severity 5. | All are published only to High. | NOT RUN |
-| TC-012 | Invalid severity | Submit severity 0 and a value greater than 5. | Invalid requests are not published to any queue. | NOT RUN |
-| TC-013 | Job type validation | Submit each defined `JobType` value. | Each valid type reaches its corresponding handler. | NOT RUN |
-| TC-014 | Unique job IDs | Submit a sequence with unique IDs. | Each result can be correlated to exactly one submitted request. | NOT RUN |
-| TC-015 | Timestamp capture | Capture QPC at ingress and at completion for known test requests. | Ingress value is retained and completion delta is non-negative for the same run. | NOT RUN |
-| TC-016 | Policy ID lookup | Submit valid and unknown `resource_policy_id` values. | Known IDs resolve to the configured policy; unknown IDs fail closed for protected operations. | NOT RUN |
+| TC-005 | Severity routing validation | Submit representative requests for severity 1, 2, 3, 4 and 5. | Severities 1–2 route to Low, 3–4 to Medium and 5 to High; no request is routed to more than one queue. | NOT RUN |
+| TC-006 | Invalid severity rejection | Submit severity values below and above the supported range, including boundary-invalid values. | Invalid requests are rejected before queue publication and counted separately from capacity rejection. | NOT RUN |
+| TC-007 | Job-type classification and dispatch | Submit representative requests for each supported job type and verify handler selection. | Each supported type selects its corresponding handler; no type is silently treated as another type. | NOT RUN |
+| TC-008 | Request-field preservation and ingress timestamp | Submit identifiable request records and verify all descriptor/payload fields after queue publication; capture ingress QPC values for a controlled sequence. | IDs, severity, urgency, control, user ID, request parameter and session input remain unchanged; ingress timestamps are captured and usable for elapsed-time conversion. | NOT RUN |
 
 ---
 
-## 6. SPSC ring-buffer correctness tests
+## 6. Group C — SPSC queue correctness (8 tests)
 
-Run the applicable tests for High, Medium and Low queues. Small-capacity test instances may be used to exercise wraparound quickly; production-capacity initialization is tested separately.
-
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-017 | Initially empty | Initialize an empty queue and attempt consumer read. | Consumer observes empty; no slot is read. | NOT RUN |
-| TC-018 | Single enqueue/dequeue | Publish one request and allow its consumer to process/release it. | Request is read once and in the correct slot. | NOT RUN |
-| TC-019 | FIFO order | Publish a known sequence of IDs to one queue. | Consumer observes the same sequence order. | NOT RUN |
-| TC-020 | Full queue | Fill a small test queue to its configured capacity. | Occupancy equals capacity; next enqueue is rejected without overwrite. | NOT RUN |
-| TC-021 | Reuse after release | Fill, process/release slots and publish additional requests. | Released slots are safely reused. | NOT RUN |
-| TC-022 | Wraparound | Drive head and tail beyond several physical array wraps. | Masked indexing remains correct; sequence and occupancy invariants hold. | NOT RUN |
-| TC-023 | Capacity invariant | Stress a small queue while checking producer/consumer counters. | Unsigned occupancy never exceeds capacity; no unread/in-flight slot is overwritten. | NOT RUN |
-| TC-024 | Cross-tier isolation | Fill or stall one queue while submitting to the other queues. | Each queue remains independent; no cross-tier slot borrowing occurs. | NOT RUN |
-| TC-025 | Tail publication | Pause/interleave producer and consumer around slot construction and tail publication. | Consumer never observes partially initialized descriptor/payload data. | NOT RUN |
-| TC-026 | Head reclamation | Pause/interleave consumer processing and producer reuse attempts. | Producer does not overwrite the slot before the consumer releases it. | NOT RUN |
+| TC-009 | Empty queue behavior | Initialize an empty queue and attempt to observe/consume work. | The queue is reported empty; no slot is read as a valid request. | NOT RUN |
+| TC-010 | Enqueue, dequeue and FIFO ordering | Publish a known sequence of requests and consume the sequence. Include a single-item and multi-item sequence. | Every published request is consumed once and in publication order. | NOT RUN |
+| TC-011 | Full queue handling | Fill a queue to its configured capacity and attempt one further publication. | The queue reports no capacity; the additional request is rejected and no occupied slot is overwritten. | NOT RUN |
+| TC-012 | Wraparound and slot reuse | Repeatedly enqueue and dequeue beyond the physical end of the ring, reusing released slots. | Masked indexing wraps correctly; released slots are reused without corruption or ordering errors. | NOT RUN |
+| TC-013 | Occupancy and counter invariants | Exercise empty, partially occupied, full and repeated wraparound states; include a controlled near-counter-wrap validation where practical. | Unsigned counter differences represent occupancy correctly and occupancy never exceeds capacity. | NOT RUN |
+| TC-014 | Producer publication visibility | Publish requests containing distinct recognizable field patterns while the consumer reads under sustained operation. | The consumer never observes a partially initialized or mixed request record. | NOT RUN |
+| TC-015 | Consumer reclamation safety | Hold a consumer on a selected request while the producer approaches the corresponding ring position. | The producer does not reuse or overwrite the slot until the consumer has completed access and released it. | NOT RUN |
+| TC-016 | Sustained SPSC sequence-integrity stress | Run a high-volume producer/consumer sequence with unique IDs and verifiable payload patterns. | No accepted ID is lost, duplicated, reordered within the queue or returned with corrupted payload data. | NOT RUN |
 
 ---
 
-## 7. Concurrent stress and lifecycle tests
+## 7. Group D — Concurrency and lifecycle (4 tests)
 
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-027 | Sustained SPSC stress | Run one producer and one consumer per queue with a large deterministic request sequence. | Every accepted request reaches one terminal record; no duplicates, corruption or unexplained losses. | NOT RUN |
-| TC-028 | Three-queue simultaneous stress | Generate a mixed severity stream while all three consumers run. | Correct routing and independent progress across all queues. | NOT RUN |
-| TC-029 | Payload integrity | Populate every field with recognizable patterns and validate at the consumer. | Descriptor and payload values are unchanged by queue publication/consumption. | NOT RUN |
-| TC-030 | State transitions | Process successful and failing test jobs. | Normal path: Ready → Running → Completed; failure path: Ready → Running → Failed. | NOT RUN |
-| TC-031 | Reserved states | Inspect POC behavior for Yielded and Cancelled. | These values are not entered by the current runtime; they remain reserved. | NOT RUN |
-| TC-032 | Graceful drain | Stop new submissions while requests remain queued/in-flight. | Accepted requests are processed to terminal state before workers exit. | NOT RUN |
-| TC-033 | Worker join | Shut down the engine and join all three consumers. | No worker remains active before diagnostics export. | NOT RUN |
-| TC-034 | Diagnostics isolation | Stress all consumers while each writes its own result array. | Each consumer writes only within its assigned array; no inter-consumer result collision. | NOT RUN |
-| TC-035 | Diagnostics capacity | Configure result-array capacity to match maximum accepted test volume and exercise the limit. | No overwrite or out-of-bounds write; capacity sufficiency is verified before timed execution. | NOT RUN |
+| TC-017 | Three-queue simultaneous execution | Generate mixed-priority traffic and allow all three consumers to operate concurrently. | Each consumer processes only its assigned queue; all three queues make progress when work is available. | NOT RUN |
+| TC-018 | Priority-tier isolation and independent progress | Apply an uneven workload, including a heavily loaded tier and a lightly loaded tier. | Queue capacities and consumer ownership remain independent; no cross-tier borrowing or work stealing occurs. | NOT RUN |
+| TC-019 | Job-state transition validation | Observe representative successful and failed jobs through Ready, Running and terminal states. Also verify reserved states are not used by the POC path. | Valid requests reach the appropriate terminal state; Yielded and Cancelled remain unused. State/flag representation remains valid. | NOT RUN |
+| TC-020 | Graceful shutdown and drain | Stop request generation while work is pending; allow accepted requests to finish and join consumers. | No accepted request is abandoned during normal shutdown; consumers terminate and shutdown completes after the queues drain. | NOT RUN |
 
 ---
 
-## 8. Load-shedding and accounting tests
+## 8. Group E — Load shedding and accounting (4 tests)
 
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-036 | High queue saturation | Prevent/slow High consumption and offer more High requests than available slots. | Requests beyond High capacity are rejected; existing slots remain intact. | NOT RUN |
-| TC-037 | Medium queue saturation | Prevent/slow Medium consumption and exceed Medium capacity. | Requests beyond Medium capacity are rejected; no overwrite occurs. | NOT RUN |
-| TC-038 | Low queue saturation | Prevent/slow Low consumption and exceed Low capacity. | Requests beyond Low capacity are rejected; no overwrite occurs. | NOT RUN |
-| TC-039 | Per-tier rejection | Saturate one tier while the other queues retain free slots. | Only the saturated tier rejects; unused capacity in other tiers is not borrowed. | NOT RUN |
-| TC-040 | Rejection classification | Trigger capacity rejection. | Diagnostics classify it as simulated overload/HTTP 429; no HTTP response is claimed or transmitted. | NOT RUN |
-| TC-041 | Offered/accepted/rejected identity | Run a valid workload that includes capacity drops. | `offered == accepted + rejected_capacity`. | NOT RUN |
-| TC-042 | Accepted terminal identity | Drain a run containing successful and failed/denied jobs. | `accepted == completed + failed` after full drain. | NOT RUN |
-| TC-043 | No false throughput | Compare offered, accepted and completed counts after a run with rejections. | Throughput uses successfully completed count only. | NOT RUN |
+| TC-021 | Per-tier saturation | Run a controlled fill-and-overflow sub-run for High, Medium and Low independently. | Each queue accepts up to its own capacity, rejects beyond capacity and does not consume another tier's unused slots. | NOT RUN |
+| TC-022 | Load-shedding classification | Submit valid requests to a full destination queue and inspect rejection accounting/diagnostic classification. | Each capacity rejection is recorded exactly once and may be labelled as a simulated HTTP 429 event; no actual HTTP response is claimed. | NOT RUN |
+| TC-023 | Request-accounting reconciliation | Complete a run containing valid accepted requests, invalid inputs, capacity rejections, successful handler results and controlled handler failures. | After drain: valid offered = accepted + capacity rejected; accepted = successful + failed; invalid requests are accounted separately. | NOT RUN |
+| TC-024 | Queue recovery after saturation | Saturate a queue, stop or reduce ingress, allow the consumer to drain, then submit additional valid requests. | Occupancy falls as requests are reclaimed; newly available slots accept subsequent requests without requiring queue reinitialization. | NOT RUN |
 
 ---
 
-## 9. Job-handler and authorization tests
+## 9. Group F — Job handlers and request semantics (8 tests)
 
-All filesystem tests shall use a dedicated WinTask test workspace containing test-owned files and directories. Do not use system directories or real user data.
-
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-044 | Session validation workload | Submit configured valid synthetic session records. | Handler produces the expected deterministic result and terminal status. | NOT RUN |
-| TC-045 | Invalid synthetic session | Submit a test token/signature not present in the configured test profile. | Handler reports failure; no cryptographic-security claim is made. | NOT RUN |
-| TC-046 | Telemetry job | Submit a telemetry job with an authorized test policy. | Event/record is constructed; any configured sandbox append operation is permitted. | NOT RUN |
-| TC-047 | Compute job | Submit a compute/sign job with known input fields. | Deterministic transform result is reproducible for the same inputs. | NOT RUN |
-| TC-048 | Authorized read | Attempt a read operation permitted by the selected policy. | Operation is authorized and the controlled test read succeeds. | NOT RUN |
-| TC-049 | Authorized append/write | Attempt an append/write operation permitted by the selected policy. | Operation is authorized and the controlled test write succeeds. | NOT RUN |
-| TC-050 | Denied read | Attempt a read not permitted by the selected policy. | Access is denied before the protected operation is performed. | NOT RUN |
-| TC-051 | Denied write | Attempt a write not permitted by the selected policy. | Access is denied; target content remains unchanged. | NOT RUN |
-| TC-052 | Unknown policy | Submit an unknown or unmapped policy ID for a protected operation. | Fail closed; access is denied. | NOT RUN |
-| TC-053 | User/policy mismatch | Use a valid policy ID with a user ID not authorized for it. | Access is denied. | NOT RUN |
-| TC-054 | Path traversal | Attempt a path containing traversal outside the approved test root. | Access is denied; no outside file is read or modified. | NOT RUN |
-| TC-055 | Policy operation mismatch | Use a policy that allows Read but attempt Write/Append. | Access is denied. | NOT RUN |
-
-The benchmark's primary high-rate profile may use in-memory policy lookups and simulated operations. These filesystem integration cases verify the actual controlled file operations separately; they are not evidence of one million disk operations per second.
+| TC-025 | Session-validation handler | Run known valid and invalid synthetic session input combinations using the same declared validation rules. | The handler returns the expected deterministic outcome for each input; no cryptographic-security claim is made. | NOT RUN |
+| TC-026 | Telemetry-processing handler | Submit representative telemetry jobs with known input fields and inspect their processing result. | The handler produces the expected deterministic in-memory processing outcome without synchronous CSV output in the consumer hot path. | NOT RUN |
+| TC-027 | Compute/sign transformation handler | Submit known 64-bit inputs and repeat identical requests. | The bit-mixing/rotation transformation is deterministic; identical inputs under the same configuration produce identical results. | NOT RUN |
+| TC-028 | Urgency-field preservation | Submit requests with different urgency values and verify the values in consumed records and diagnostics. | Urgency is preserved exactly and reported; it does not alter FIFO ordering in the POC. | NOT RUN |
+| TC-029 | Terminal-state and status consistency | Exercise successful and failed handler outcomes and compare slot state with the result record. | Completed requests have Completed status; failed handler requests have Failed status; result and state agree. | NOT RUN |
+| TC-030 | Unsupported job-type handling | Submit a request with an unsupported job-type value through the controlled validation path. | The request is rejected or marked invalid before an undefined handler is invoked; invalid input is accounted separately. | NOT RUN |
+| TC-031 | Handler-failure containment | Force a controlled handler failure while other valid requests remain queued. | The failed request is recorded as Failed; the assigned consumer remains operational and continues processing subsequent requests. | NOT RUN |
+| TC-032 | Mixed job-type processing | Submit all three supported job types across all priority tiers in a declared mixed workload. | Each request reaches the correct handler and priority consumer; IDs, job types and terminal results remain correctly associated. | NOT RUN |
 
 ---
 
-## 10. CPU affinity and platform tests
+## 10. Group G — Windows platform and diagnostics (3 tests)
 
-| ID | Test | Procedure | Expected result | Status |
+| ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
-| TC-056 | Ingestor affinity | Start the ingestor and query its assigned processor affinity. | It is assigned to the configured project processor/core 0. | NOT RUN |
-| TC-057 | High consumer affinity | Start the High consumer and query its assigned affinity. | It is assigned to configured processor/core 2. | NOT RUN |
-| TC-058 | Medium consumer affinity | Start the Medium consumer and query its assigned affinity. | It is assigned to configured processor/core 4. | NOT RUN |
-| TC-059 | Low consumer affinity | Start the Low consumer and query its assigned affinity. | It is assigned to configured processor/core 6. | NOT RUN |
-| TC-060 | Affinity failure handling | Use an invalid test affinity configuration or force the API failure path in a controlled test. | The affected test/benchmark run is marked failed/invalid; failure is not silently ignored. | NOT RUN |
-| TC-061 | QPC frequency initialization | Query and cache QPC frequency once during initialization. | Frequency is valid and reused for all conversions in that run. | NOT RUN |
-| TC-062 | QPC latency conversion | Use known tick deltas or compare conversion against an independently calculated value. | Conversion to fractional microseconds is correct within expected floating-point rounding. | NOT RUN |
+| TC-033 | Thread-affinity validation | Start the ingestor and each consumer; inspect the configured affinity of all four threads. | Ingestor uses configured processor 0; High, Medium and Low consumers use configured processors 2, 4 and 6 respectively. The actual mapping is recorded. | NOT RUN |
+| TC-034 | QPC timing and latency conversion | Verify QPC frequency initialization, monotonic ingress/terminal samples and conversion of a known tick delta to fractional microseconds. | Frequency is valid and cached; conversion is correct within expected numeric precision; measured latency is ingress-to-terminal rather than handler-only time. | NOT RUN |
+| TC-035 | Diagnostics isolation and CSV validation | Run representative mixed jobs; verify consumer-isolated result records, terminal record completeness, output schema, row count, numeric parsing and aggregate reconciliation. | Every accepted request reaching a terminal result has one corresponding diagnostic record; `TestResults.csv` is generated after shutdown and is parseable by the offline analysis workflow. | NOT RUN |
 
 ---
 
-## 11. Diagnostics and CSV tests
+## 11. Group H — Performance and scalability (5 tests)
 
-| ID | Test | Procedure | Expected result | Status |
+Performance tests shall use an optimized Release build after initialization and affinity setup. Record the exact request mix, offered volume, measurement duration and run configuration. Repeat measurements sufficiently to avoid treating one favorable run as conclusive.
+
+| ID | Benchmark | Workload / procedure | Measurements and expected interpretation | Status |
 |---|---|---|---|---|
-| TC-063 | Per-job fields | Complete representative jobs of each priority/type. | Result rows contain JobID, PriorityClass, Urgency, LatencyMicroseconds and Status. | NOT RUN |
-| TC-064 | Latency meaning | Compare saved ingress QPC with terminal completion QPC. | Exported latency includes queue waiting plus authorization/handler processing through terminal completion. | NOT RUN |
-| TC-065 | Fractional latency | Process jobs with sub-microsecond measured durations where timer resolution permits. | CSV preserves fractional microseconds; values are not rounded to whole microseconds prematurely. | NOT RUN |
-| TC-066 | CSV after shutdown | Complete a run and inspect output timing. | CSV is written only after consumers stop and result arrays are stable. | NOT RUN |
-| TC-067 | CSV row count | Compare per-job result rows with accepted jobs that reached a terminal outcome. | One terminal record exists for each accepted and processed job. | NOT RUN |
-| TC-068 | Aggregate summary | Compare CSV/summary counts with independently counted test inputs and statuses. | Offered, accepted, completed, failed and capacity-rejected totals reconcile. | NOT RUN |
-| TC-069 | CSV parseability | Parse output with a standard CSV reader (for example, the user's Python analysis script). | File has consistent columns, valid delimiters and parseable numeric fields. | NOT RUN |
+| TC-036 | Baseline mixed-traffic benchmark | Generate a declared mixture of High, Medium and Low requests below queue saturation. | Record offered, accepted, completed, failed and rejected counts; completed requests/second; and latency distribution. Use as the baseline result. | NOT RUN |
+| TC-037 | One-million-request volume | Submit at least 1,000,000 uniquely identified requests and allow the accepted workload to drain. | Demonstrate request-volume handling and reconcile all counts. This tests total workload volume, not one-million-per-second throughput. | NOT RUN |
+| TC-038 | One-million requests/second target | Run the declared benchmark profile over a measured interval and calculate successfully completed requests divided by that interval. | Report the measured completed requests/second. State whether the stretch target was reached; do not infer it from offered or accepted rate. | NOT RUN |
+| TC-039 | Priority-distribution sensitivity | Compare balanced and deliberately skewed severity distributions while keeping other workload parameters controlled. | Record per-tier accepted/completed/rejected counts, peak occupancy, total completed throughput and latency. Explain tier-specific saturation where observed. | NOT RUN |
+| TC-040 | AVX2 versus reference slot transfer | Compare the AVX2-assisted 32-byte slot transfer with a correctness-equivalent reference path using identical request data and workload settings. | Both paths preserve identical records and accounting. Report measured throughput/latency differences; do not assume a fixed cycle cost. | NOT RUN |
 
 ---
 
-## 12. Performance and scalability benchmark cases
+## 12. Required benchmark summary
 
-Performance tests shall be run in Release mode, after warm-up and thread-affinity setup. Record the exact request mix and run duration. Repeat each scenario sufficiently to report a distribution or at least multiple independent run results; do not select only the best run without disclosure.
-
-| ID | Benchmark | Workload/procedure | Measurements | Status |
-|---|---|---|---|---|
-| TC-070 | Baseline mixed traffic | Generate a defined mixture of High/Medium/Low requests below queue saturation. | Offered/s, accepted/s, completed/s, latency distribution, rejection count. | NOT RUN |
-| TC-071 | One-million request volume | Submit at least 1,000,000 uniquely identified requests, then drain. | Total duration, accepted/completed/failed/rejected counts, end-to-end throughput. | NOT RUN |
-| TC-072 | One-million requests/second target | Run the defined workload with a measured interval and calculate successfully completed requests per second. | Completed requests/s; do not infer from offered rate. | NOT RUN |
-| TC-073 | Priority distribution sensitivity | Test multiple declared severity distributions. | Per-tier accepted/completed counts, queue pressure and overall throughput. | NOT RUN |
-| TC-074 | High-tier overload | Offer High traffic beyond High consumer capacity while lower tiers are not saturated. | High rejections and unaffected lower-tier operation. | NOT RUN |
-| TC-075 | Queue headroom/recovery | Approach saturation, stop or reduce ingress, and allow consumers to drain. | Queue occupancy recovers; subsequent valid jobs are accepted again. | NOT RUN |
-| TC-076 | AVX2 vs reference copy | Compare AVX2 slot-copy/ingestion with a correctness-equivalent reference copy under identical traffic. | Throughput and latency; verify identical request contents and counts. | NOT RUN |
-| TC-077 | Single-slot vs pair publication | Compare ordinary publication with optional two-slot same-queue batching if implemented. | Throughput, median/tail latency, occupancy and rejection behavior. | NOT RUN |
-| TC-078 | Compact vs experimental cache mitigation | Compare 32-byte baseline against any implemented paired/padded experimental variant. | Throughput and latency, plus memory footprint. | NOT RUN |
-| TC-079 | Processing-cost sensitivity | Compare the three synthetic handler workloads or controlled workload weights. | Per-type latency and total completed throughput. | NOT RUN |
-| TC-080 | Diagnostics overhead | Compare diagnostics enabled against a controlled measurement build with equivalent work and diagnostics disabled, if implemented safely. | Throughput/latency delta; no production result may omit required accounting. | NOT RUN |
-
-### 12.1 Required benchmark summary
-
-Record at least:
+Complete this summary for each final benchmark run.
 
 | Metric | Result |
 |---|---|
-| Workload request count | **Not run** |
-| Severity distribution | **Not run** |
-| Measurement duration | **Not run** |
-| Requests offered | **Not run** |
-| Requests accepted | **Not run** |
-| Requests completed successfully | **Not run** |
-| Requests failed/denied | **Not run** |
-| Requests rejected for capacity | **Not run** |
-| Completed throughput (requests/second) | **Not run** |
-| Median ingress-to-completion latency | **Not run** |
-| 95th percentile latency | **Not run** |
-| 99th percentile latency | **Not run** |
-| Maximum observed latency | **Not run** |
-| High queue peak occupancy | **Not run** |
-| Medium queue peak occupancy | **Not run** |
-| Low queue peak occupancy | **Not run** |
-| CSV path | **Not generated** |
+| Workload request count | NOT RECORDED |
+| Severity distribution | NOT RECORDED |
+| Job-type distribution | NOT RECORDED |
+| Measurement duration | NOT RECORDED |
+| Requests offered | NOT RECORDED |
+| Valid requests offered | NOT RECORDED |
+| Requests accepted | NOT RECORDED |
+| Requests completed successfully | NOT RECORDED |
+| Requests failed | NOT RECORDED |
+| Invalid requests | NOT RECORDED |
+| Capacity-rejected requests | NOT RECORDED |
+| Completed throughput (requests/second) | NOT RECORDED |
+| Median ingress-to-terminal latency | NOT RECORDED |
+| 95th percentile latency | NOT RECORDED |
+| 99th percentile latency | NOT RECORDED |
+| Maximum observed latency | NOT RECORDED |
+| High queue peak occupancy | NOT RECORDED |
+| Medium queue peak occupancy | NOT RECORDED |
+| Low queue peak occupancy | NOT RECORDED |
+| Ingestor/consumer affinity mapping | NOT RECORDED |
+| CSV output path | NOT GENERATED |
 
-Percentiles are computed offline from the per-job result records. They are analysis outputs, not additional hot-path instrumentation requirements.
+Latency percentiles may be calculated offline from the recorded per-job results. Offline analysis is not an additional hot-path instrumentation requirement.
 
 ---
 
-## 13. Execution record template
+## 13. Test execution record template
 
-Copy this block for each test campaign or benchmark scenario.
+Copy this record for each test campaign or benchmark scenario.
 
 ### Run record — [Run ID]
 
 | Item | Value |
 |---|---|
-| Date/time | **Not recorded** |
-| Executable | `WinTaskValidator.exe` / `WinTaskBenchmark.exe` |
-| Build configuration | **Not recorded** |
-| Commit/revision | **Not recorded** |
-| Test case IDs | **Not recorded** |
-| Machine/CPU | **Not recorded** |
-| Windows build | **Not recorded** |
-| Thread affinity mapping | **Not recorded** |
-| Input/workload seed | **Not recorded** |
-| Result file(s) | **Not recorded** |
+| Date/time | NOT RECORDED |
+| Executable/menu operation | WinTask.exe — Validator / Benchmark / Full Evaluation |
+| Build configuration | NOT RECORDED |
+| Source revision | NOT RECORDED |
+| Test case IDs | NOT RECORDED |
+| Machine/CPU | NOT RECORDED |
+| Windows build | NOT RECORDED |
+| Compiler/STL/toolset | NOT RECORDED |
+| Thread-affinity mapping | NOT RECORDED |
+| Workload seed and distribution | NOT RECORDED |
+| Measurement duration | NOT RECORDED |
+| Result file(s) | NOT RECORDED |
 
 **Observed result:**  
 _To be completed after execution._
 
-**Expected vs actual:**  
+**Expected versus actual:**  
 _To be completed after execution._
 
 **Status:** `NOT RUN`
@@ -288,7 +250,7 @@ _To be completed after execution._
 _Add console output, CSV filename, relevant screenshots or reproducible notes after execution._
 
 **Defect/reference:**  
-_Complete if the test fails._
+_Complete if the test fails or is blocked._
 
 ---
 
@@ -298,7 +260,7 @@ _Complete if the test fails._
 |---|---|---|---|---|---|---|
 | — | — | — | No execution results recorded yet. | — | — | — |
 
-Any deviation from the Design & Specification Document must be recorded here, including changes to structure size, queue capacity, queue ownership, memory ordering, affinity, timestamp representation, job semantics or throughput accounting.
+Any deviation from the Design & Specification Document shall be recorded here, including changes to request layout, queue capacity, ownership, memory ordering, processor affinity, timestamp representation, job semantics, source-file responsibilities or throughput accounting.
 
 ---
 
@@ -306,20 +268,22 @@ Any deviation from the Design & Specification Document must be recorded here, in
 
 | Acceptance item | Status |
 |---|---|
-| Structural assertions pass | NOT RUN |
-| SPSC queue correctness passes | NOT RUN |
-| Concurrency stress passes | NOT RUN |
-| Queue saturation/load shedding passes | NOT RUN |
-| Request accounting reconciles | NOT RUN |
-| Job handlers behave deterministically | NOT RUN |
-| File authorization tests pass | NOT RUN |
-| CPU affinity verified | NOT RUN |
-| QPC latency conversion verified | NOT RUN |
-| CSV output validated | NOT RUN |
-| Performance benchmark completed | NOT RUN |
-| Final benchmark claims reviewed against completed counts | NOT RUN |
+| Request layout and configuration tests pass | NOT RUN |
+| Ingestion and request-field integrity tests pass | NOT RUN |
+| SPSC queue correctness tests pass | NOT RUN |
+| Concurrency and lifecycle tests pass | NOT RUN |
+| Load-shedding and accounting tests pass | NOT RUN |
+| All three synthetic job handlers behave as specified | NOT RUN |
+| Urgency metadata and FIFO semantics are correct | NOT RUN |
+| Processor affinity is verified | NOT RUN |
+| QPC latency conversion is verified | NOT RUN |
+| Diagnostics and CSV output are validated | NOT RUN |
+| One-million-request volume run is completed | NOT RUN |
+| One-million requests/second target is measured and reported | NOT RUN |
+| AVX2/reference comparison is recorded | NOT RUN |
+| Final benchmark results and environment are documented | NOT RUN |
 
-**Final disposition:** Pending implementation and test execution.
-
-**Reviewer notes:**  
-_To be completed after the test campaign._
+**Final result:** NOT RUN  
+**Executed by:** NOT RECORDED  
+**Execution date:** NOT RECORDED  
+**Remarks:** To be completed after implementation and execution.
