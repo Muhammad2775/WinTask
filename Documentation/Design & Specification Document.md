@@ -1,59 +1,64 @@
 # WinTask — Design & Specification Document
 
-**Document type:** Technical Requirements, High-Level/Low-Level Design & Architecture  
-**Project:** WinTask  
-**Document version:** 0.1 — Proof-of-Concept baseline  
-**Status:** Approved for implementation planning  
+**Document type:** Combined Technical Requirements, High-Level Design and Low-Level Design  
+**Project:** WinTask — High-Performance Priority-Based Task Scheduler & Processor for Windows  
+**Document version:** 0.2 — Revised Proof-of-Concept baseline  
+**Status:** Approved architectural baseline; implementation pending  
+**Academic context:** Semester 5 — Operating Systems (Lab Project)  
 **Platform:** Windows x64  
-**Primary language:** C++23 (C++26 may be enabled where useful)  
-**Compiler/toolchain:** Clang 23.1.5 targeting `x86_64-pc-windows-msvc`, using the MSVC STL and Microsoft Build Tools  
-**Project window:** 10-day implementation and validation period
+**Primary language:** C++20 (C++23 features may be used where they provide a concrete benefit and are supported by the selected toolchain)  
+**Compiler/toolchain:** Clang 23.1.5 targeting `x86_64-pc-windows-msvc`, using the MSVC STL and Microsoft Build Tools for Visual Studio 2026  
+**Implementation and validation window:** 10 days
 
-## 1. Purpose and project definition
+---
 
-WinTask is a Windows-native, priority-aware request and job-management proof of concept. It models a server-side request-processing engine using one dedicated ingestion thread, three independent bounded single-producer/single-consumer (SPSC) queues, and three dedicated consumer threads. Incoming jobs are routed into High, Medium or Low priority queues, processed by the corresponding consumer, checked against an application-level file/folder access policy where applicable, and recorded in preallocated diagnostics storage for offline reporting.
+## 1. Project definition
 
-The project emphasizes compact request representation, bounded memory use, predictable queue ownership, atomic publication/reclamation, CPU affinity, load shedding, concurrency correctness and measurable throughput/latency.
+WinTask is a Windows-native, high-performance, priority-based task scheduler and processor. It is a proof-of-concept system intended to model how a bounded server-side task-processing component can ingest a large volume of requests, classify them by priority, dispatch them through independent queues, process them concurrently, and collect performance results.
 
-**WinTask is not a clone of Windows Task Manager.** It manages application-level jobs/requests; it does not enumerate, control or schedule arbitrary Windows processes. It is also not a production HTTP server or a replacement for the Windows kernel scheduler.
+The architecture uses one dedicated ingestion thread, three independent bounded single-producer/single-consumer (SPSC) ring buffers, and three dedicated consumer threads. The ingestor classifies each valid request into the High, Medium or Low tier. Each consumer processes only the queue assigned to it. Queue capacity is fixed, and requests that cannot be admitted are rejected through an explicit load-shedding policy.
+
+WinTask emphasizes compact request representation, bounded memory use, clear producer/consumer ownership, C++ atomic synchronization, CPU affinity, cache-aware data placement, SIMD-assisted request ingestion, predictable overload behavior, and measurable throughput and end-to-end latency.
+
+**WinTask is an application-level task scheduler and processor, not a replacement for the Windows kernel scheduler.** It does not enumerate, control or schedule arbitrary Windows processes, and it is not intended to be a production HTTP server. The server-oriented workload is simulated in-process.
 
 ### 1.1 Primary objective
 
-Implement and evaluate a bounded request-processing architecture with a stretch performance objective of **1,000,000 successfully completed requests per second** under a defined synthetic workload on the project machine.
+Implement and evaluate a bounded, priority-separated request-processing architecture with a stretch performance objective of **1,000,000 successfully completed requests per second** under a defined synthetic workload on the project machine.
 
-The figure is a target to test, not a guaranteed capability. Queue capacity, ingestion rate, accepted request rate, completed request rate and simultaneous execution are separate measurements.
+The one-million-requests-per-second figure is a target to measure, not a guaranteed capability. Offered request rate, accepted request rate, completed request rate, queue capacity and simultaneous execution are distinct concepts and shall be reported separately.
 
 ### 1.2 Secondary objectives
 
-- Demonstrate priority-separated request routing.
-- Demonstrate producer/consumer synchronization using C++ atomics and SPSC ownership.
-- Keep each queue slot compact and fixed at 32 bytes.
-- Bound pending request storage through preallocated ring buffers.
-- Apply an explicit load-shedding policy when a destination queue is full.
-- Run one dedicated consumer per priority tier.
-- Demonstrate application-level authorization for configured file/folder resources.
-- Measure end-to-end ingress-to-terminal-completion latency using the Windows performance counter.
-- Collect diagnostics without writing CSV data from the hot processing path.
-- Keep the reusable queue, execution and request types sufficiently separate to support later extraction into PDSTL infrastructure.
+- Demonstrate priority-based request classification and dispatch across High, Medium and Low queues.
+- Demonstrate SPSC producer/consumer ownership and synchronization using C++ atomics.
+- Retain a compact, fixed-size 32-byte request slot.
+- Bound pending-request storage through three preallocated ring buffers.
+- Apply explicit load shedding when a destination queue is full.
+- Run one dedicated consumer for each priority tier.
+- Measure ingress-to-terminal-completion latency using the Windows high-resolution performance counter.
+- Exercise three representative synthetic job types: session validation, telemetry processing and signature/bit-transformation computation.
+- Collect per-consumer results without performing CSV formatting or file output in the measured processing path.
+- Evaluate the effect of cache-line placement and AVX2-assisted slot transfer rather than assuming an optimization is beneficial.
+- Keep the engine and its queue mechanism sufficiently self-contained to support later investigation or extraction into PDSTL.
 
-### 1.3 Out of scope for this POC
+### 1.3 Scope boundaries and exclusions
 
-The following are deliberately excluded from the 10-day implementation:
+The following are outside the current proof of concept:
 
 - A global overflow queue or cross-priority capacity borrowing.
-- A Signal Tree or any other alternative readiness-selection structure.
+- A Signal Tree or another alternative readiness-selection structure.
 - A dynamic worker pool, work stealing or arbitrary worker creation.
-- A GUI, dashboard, OS visualizer or web interface.
-- Kernel modifications, kernel drivers, kernel modules or filesystem minifilters.
-- A production HTTP listener or actual HTTP response transport. HTTP 429 is a simulated overload/rejection classification only.
-- Arbitrary executable launching or a general-purpose process manager.
-- Native Windows security-token isolation between jobs and modification of real system ACLs.
-- Cryptographically secure authentication/signature verification.
+- A GUI, dashboard, web interface or OS visualizer.
+- Kernel modifications, drivers, kernel modules or filesystem minifilters.
+- A production HTTP listener or actual HTTP response transport. HTTP 429 is only a simulated overload/rejection classification.
+- Arbitrary executable launching or management of unrelated Windows processes.
+- Cryptographically secure authentication or real signature verification.
 - Intra-queue urgency reordering in the initial implementation.
 - A general-purpose allocator, per-thread allocator caches or lock-free memory reclamation.
-- A separate `WinTask.cpp` executable entry point duplicating the benchmark's end-to-end demonstration.
+- A separate executable implementation of the engine in addition to the main WinTask application.
 
-The file/folder permission objective is implemented as **application-level authorization over a controlled test workspace**. This does not prevent an unrelated process running under the same Windows security identity from bypassing WinTask's application-level checks.
+The three job handlers provide controlled synthetic processing. They are not security services and shall not be described as providing cryptographic protection.
 
 ---
 
@@ -61,19 +66,23 @@ The file/folder permission objective is implemented as **application-level autho
 
 | Term | Meaning in WinTask |
 |---|---|
-| Request / job | One fixed-size unit submitted to WinTask for processing. The terms are used interchangeably in this document. |
-| Ingestor | The single producer thread that validates basic request fields, timestamps, classifies and routes jobs. |
-| Consumer | One dedicated thread that drains exactly one priority queue. |
-| Queue slot | One 32-byte `QueueSlot` containing a descriptor and payload. |
-| Severity | Input field that selects the High, Medium or Low queue. It is a priority-classification value in this POC. |
-| Urgency | Additional request metadata. It is recorded but does not reorder FIFO requests in this POC. |
-| Resource policy ID | Identifier resolving to a preconfigured application-level resource/access policy. |
-| Ingress timestamp | Raw `QueryPerformanceCounter` tick value captured by the ingestor. |
-| Load shedding | Rejecting a new request when its destination ring buffer has no free slot. |
-| Accepted request | A valid request successfully published into its destination queue. |
-| Completed request | An accepted request that reaches the successful terminal state. Failed/denied requests are recorded separately in per-job status data. |
-| Queue capacity | Maximum number of pending/in-flight slots owned by a particular ring buffer. |
-| Aggregate capacity | Sum of the three independent queue capacities; it is not a shared pool. |
+| Request / job / task | One fixed-size unit submitted to WinTask for processing. These terms refer to the same work item in this document. |
+| Ingestor | The single producer thread that validates basic request fields, captures ingress time, classifies priority and publishes requests to the corresponding queue. |
+| Consumer | One dedicated thread that drains exactly one priority queue and processes its requests. |
+| Queue slot | One 32-byte `QueueSlot`-equivalent record containing a descriptor and payload. |
+| Severity | Input value used to select the High, Medium or Low queue. |
+| Priority tier | The destination processing tier selected from severity: High, Medium or Low. |
+| Urgency | Additional request metadata retained for diagnostics. It does not change FIFO ordering in this proof of concept. |
+| Ingress timestamp | The 64-bit raw `QueryPerformanceCounter` value captured when a request enters the system. |
+| SPSC | Single-producer/single-consumer: one thread publishes requests to a queue and exactly one assigned thread consumes them. |
+| Load shedding | Rejecting a new request when its selected queue has no available slot. |
+| Offered request | A request presented to the ingestion path, whether or not it is accepted. |
+| Accepted request | A valid request successfully published into its selected queue. |
+| Completed request | An accepted request whose handler reaches the successful terminal state. |
+| Failed request | An accepted request whose processing reaches the failure terminal state. |
+| Capacity rejection | A valid request rejected because its selected queue is full. |
+| Aggregate capacity | Sum of the capacities of all three queues. It is not a shared pool. |
+| End-to-end latency | Elapsed time from ingress timestamp capture to the request's terminal completion/failure point. |
 
 ---
 
@@ -83,142 +92,127 @@ The file/folder permission objective is implemented as **application-level autho
 
 | ID | Requirement |
 |---|---|
-| FR-01 | WinTask shall accept requests through one ingestion thread. |
+| FR-01 | WinTask shall accept requests through one dedicated ingestion thread. |
 | FR-02 | Each valid request shall be assigned to exactly one priority queue using its severity value. |
-| FR-03 | Severity values 1–2 shall route to Low; 3–4 to Medium; 5 to High. Values outside 1–5 shall be rejected as invalid input and shall not be published to a queue. |
+| FR-03 | Severity values 1–2 shall route to Low; 3–4 to Medium; and 5 to High. Values outside 1–5 shall be rejected as invalid input and shall not be published. |
 | FR-04 | Each priority queue shall be an independently allocated, bounded SPSC ring buffer. |
-| FR-05 | The producer shall be the only writer of a queue's tail counter and the consumer shall be the only writer of its head counter. |
+| FR-05 | The ingestor shall be the only writer of each queue's tail counter; the assigned consumer shall be the only writer of its head counter. |
 | FR-06 | Each queue shall have exactly one dedicated consumer thread. |
-| FR-07 | A consumer shall process requests in FIFO order within its own queue. |
-| FR-08 | A full destination queue shall reject the incoming request and increment the capacity-rejection counter. No request shall be silently overwritten. |
-| FR-09 | The system shall not transfer requests to another priority queue when the selected queue is full. |
-| FR-10 | Each accepted request shall pass through the defined job handler and, for file-facing operations, the application-level authorization check. |
+| FR-07 | Each consumer shall preserve FIFO processing order within its own queue. |
+| FR-08 | A full destination queue shall reject an incoming request and increment the capacity-rejection accounting. No occupied slot shall be overwritten. |
+| FR-09 | A request shall not be transferred to another priority queue when its selected queue is full. |
+| FR-10 | Each accepted request shall be dispatched to the handler associated with its declared job type. |
 | FR-11 | Consumers shall record terminal result data in preallocated, consumer-isolated diagnostics storage. |
-| FR-12 | CSV generation shall occur after the measured run has drained and all worker threads have terminated. |
-| FR-13 | The system shall maintain aggregate offered, accepted, successfully completed and capacity-rejected counts. |
-| FR-14 | The benchmark shall calculate completed-request throughput and ingress-to-terminal-completion latency. |
-| FR-15 | The system shall drain accepted work before normal shutdown and shall join all worker threads before exporting final results. |
+| FR-12 | CSV generation shall occur after the benchmark workload has drained and all consumer threads have terminated. |
+| FR-13 | The system shall maintain aggregate counts for offered, valid, accepted, successfully completed, failed, invalid and capacity-rejected requests. |
+| FR-14 | The benchmark shall calculate successfully completed request throughput and ingress-to-terminal-completion latency. |
+| FR-15 | Normal shutdown shall stop further ingestion, drain accepted work, terminate consumers and join all worker threads before final result export. |
+| FR-16 | The command-line interface shall provide separate validation, benchmark, full-evaluation and exit choices. |
 
 ### 3.2 Non-functional requirements
 
 | ID | Requirement |
 |---|---|
-| NFR-01 | `QueueSlot` shall have a compile-time verified size of exactly 32 bytes. |
-| NFR-02 | Queue backing storage shall begin at a 64-byte-aligned address. Individual slots shall retain a 32-byte stride; the slot type shall not be padded to 64 bytes. |
-| NFR-03 | Descriptor and payload member offsets shall be verified using `static_assert` and `offsetof`. |
-| NFR-04 | Queue publication and slot reclamation shall use explicit acquire/release ordering. |
-| NFR-05 | Head and tail control variables shall be independently cache-line aligned to avoid sharing their control cache line. |
-| NFR-06 | The ring-buffer capacities shall be powers of two and indexing shall use a mask. |
-| NFR-07 | The steady-state ingestion/processing path shall not perform CSV formatting or synchronous CSV file output. |
+| NFR-01 | The combined request slot shall have a compile-time verified size of exactly 32 bytes. |
+| NFR-02 | Each queue's backing storage shall begin at a 64-byte-aligned address. Individual slots shall retain a 32-byte stride. |
+| NFR-03 | Descriptor and payload member offsets shall be verified at build time. |
+| NFR-04 | Queue publication and slot reclamation shall use explicit acquire/release memory ordering. |
+| NFR-05 | Producer-tail and consumer-head control variables shall occupy separate cache-line-aligned locations. |
+| NFR-06 | Queue capacities shall be powers of two, permitting masked physical indexing. |
+| NFR-07 | The steady-state ingestion and processing paths shall not format or synchronously write CSV output. |
 | NFR-08 | Diagnostics storage shall be allocated before the timed benchmark interval and partitioned by consumer. |
-| NFR-09 | Thread affinity shall use the project machine's explicitly selected processor mapping. |
-| NFR-10 | AVX2 shall be used for the planned 32-byte slot-copy/ingestion path on the target machine, with its benefit measured rather than assumed. |
-| NFR-11 | Benchmark reports shall distinguish offered, accepted, completed and rejected requests. |
-| NFR-12 | The implementation shall compile with the selected Clang/MSVC STL toolchain; GCC is not a target compiler for this project. |
+| NFR-09 | The ingestor and consumer threads shall use the processor-affinity mapping selected for the project machine. |
+| NFR-10 | AVX2-assisted 32-byte slot transfer shall be evaluated on the target machine; instruction count shall not be treated as a cycle-count guarantee. |
+| NFR-11 | Benchmark output shall distinguish offered, accepted, completed, failed, invalid and capacity-rejected requests. |
+| NFR-12 | The selected Clang/MSVC STL toolchain shall be the project's build and validation target. GCC is not part of this project's primary toolchain matrix. |
+| NFR-13 | Queue and engine storage shall be initialized before the measured interval. No queue backing-store allocation shall occur per request. |
 
-### 3.3 Performance objectives and claims
+### 3.3 Performance objectives and interpretation
 
-- **Primary stretch target:** 1,000,000 successfully completed requests/second for a stated workload, run duration, thread affinity and machine configuration.
-- **Capacity:** 1,310,720 pending/in-flight slots across the three queues.
-- **Latency:** measured from ingress timestamp to terminal completion/failure; report in microseconds with fractional precision derived from QPC ticks.
-- **Processing-cost estimate:** the originally proposed 300–700 ns processing interval is a workload-design estimate only. It is not a guaranteed or accepted benchmark result until measured.
-- **No result may claim 1M requests/second based only on offered or accepted requests.** The completed count and benchmark duration are the basis of completed throughput.
+- **Primary stretch target:** 1,000,000 successfully completed requests per second for a declared workload, run duration, processor-affinity configuration and machine environment.
+- **Aggregate pending capacity:** 1,310,720 slots across the three independent queues.
+- **Queue-slot storage:** 40 MiB in total, excluding indices, diagnostics, executable/runtime state and other overhead.
+- **Latency:** ingress-to-terminal-completion/failure, reported in microseconds with fractional precision derived from QPC ticks.
+- **Synthetic processing estimate:** the originally proposed 300–700 ns processing interval is a workload-design estimate only. It is not an assumed measured result.
+- **Throughput claims:** only successfully completed requests divided by the measurement interval qualify as completed throughput. Offered or accepted request rates shall not be reported as completed throughput.
 
 ---
 
 ## 4. Request data model and structural memory layout
 
-### 4.1 Job type and state values
+### 4.1 Job categories and processing states
 
-```cpp
-enum class JobType : std::uint8_t {
-    VALIDATE_SESSION = 0,
-    TELEMETRY_LOG    = 1,
-    COMPUTE_SIGN     = 2
-};
+The initial job categories are:
 
-enum class JobState : std::uint8_t {
-    Ready     = 0,
-    Running   = 1,
-    Yielded   = 2, // Reserved; not used by the POC execution path.
-    Cancelled = 3, // Reserved; cancellation is not implemented in this POC.
-    Completed = 4,
-    Failed    = 5
-};
-```
+| Job type | Purpose in the POC |
+|---|---|
+| `VALIDATE_SESSION` | Performs a deterministic synthetic validation operation using the request's user/session fields. It is not cryptographic authentication. |
+| `TELEMETRY_LOG` | Performs a bounded synthetic telemetry-processing operation. The measured hot path does not synchronously write a log file. |
+| `COMPUTE_SIGN` | Performs a deterministic bit-mixing/rotation workload over the supplied 64-bit input. It is not a cryptographic signature algorithm. |
 
-`JobState` is stored in the lower three bits of `JobDescriptor::control`. The upper five bits are reserved for flags. State helpers shall mask only the lower three bits and preserve the upper five flag bits. `Yielded` and `Cancelled` remain reserved enum values; the POC does not implement preemption, yielding or cancellation.
+The request state values are:
+
+| State | Value | POC interpretation |
+|---|---:|---|
+| Ready | 0 | Published and waiting to be processed. |
+| Running | 1 | Currently being processed by its assigned consumer. |
+| Yielded | 2 | Reserved; yielding is not implemented. |
+| Cancelled | 3 | Reserved; cancellation is not implemented. |
+| Completed | 4 | Handler completed successfully. |
+| Failed | 5 | Handler reached a failure outcome. |
+
+The state occupies the lower three bits of the one-byte control field. The upper five bits remain available as flags. State operations must preserve the flag bits. The POC does not implement preemption, yielding or cancellation.
 
 ### 4.2 Approved 32-byte representation
 
-The previous generic timestamp/policy arrangement is clarified as follows. The generic 64-bit descriptor field is assigned to the ingress QPC timestamp. The 32-bit payload field previously described as a microsecond timestamp is assigned to the resource policy identifier. This preserves the intended offsets and the 32-byte slot size.
+The request representation retains a 16-byte descriptor and a 16-byte payload. The descriptor's 64-bit field is assigned to the ingress QPC timestamp. The payload retains the user identifier and synthetic session input; the former 32-bit microsecond timestamp position is repurposed as a compact request-specific parameter.
 
-```cpp
-#include <cstddef>
-#include <cstdint>
-#include <type_traits>
+| Structure/member | Size | Offset within parent | Meaning |
+|---|---:|---:|---|
+| **JobDescriptor** | **16 B** | — | Request metadata and timing. |
+| type | 1 B | 0 | Selects one of the three fixed job types. |
+| severity | 1 B | 1 | Selects High, Medium or Low. |
+| urgency | 1 B | 2 | Additional metadata, retained for reporting. |
+| control | 1 B | 3 | State in lower three bits; upper five bits reserved for flags. |
+| job_id | 4 B | 4 | Request identifier, unique within a benchmark run. |
+| ingress_qpc_ticks | 8 B | 8 | Raw 64-bit QPC timestamp captured at ingress. |
+| **JobPayload** | **16 B** | — | Compact operation-specific input. |
+| user_id | 4 B | 0 | Synthetic requester/session identity input. |
+| request_parameter | 4 B | 4 | Compact 32-bit parameter interpreted by the selected job type. |
+| session_signature | 8 B | 8 | Synthetic 64-bit session/token input for deterministic processing. |
+| **QueueSlot** | **32 B** | — | Descriptor followed immediately by payload. |
 
-struct JobDescriptor {
-    JobType       type;               // Offset 0, 1 byte
-    std::uint8_t  severity;           // Offset 1, 1 byte
-    std::uint8_t  urgency;            // Offset 2, 1 byte
-    std::uint8_t  control;            // Offset 3, 1 byte
-    std::uint32_t job_id;             // Offset 4, 4 bytes
-    std::uint64_t ingress_qpc_ticks;  // Offset 8, 8 bytes
-};
+No path strings, dynamically allocated payloads or owning pointers are stored in a queue slot. The slot is a fixed-size, trivially transferable request record. The exact size and offsets are build-time requirements for the selected x64 target.
 
-struct JobPayload {
-    std::uint32_t user_id;             // Offset 0, 4 bytes
-    std::uint32_t resource_policy_id;  // Offset 4, 4 bytes
-    std::uint64_t session_signature;   // Offset 8, 8 bytes
-};
+**Packing policy:** no packing pragma is required. The member order is intended to produce the stated natural layout for the selected target. Compile-time size/offset checks are authoritative. Queue backing storage is 64-byte aligned; the slot type itself remains 32 bytes and shall not be padded to 64 bytes.
 
-struct QueueSlot {
-    JobDescriptor descriptor; // Offset 0, 16 bytes
-    JobPayload    payload;    // Offset 16, 16 bytes
-};
+### 4.3 Field semantics and constraints
 
-static_assert(sizeof(JobDescriptor) == 16);
-static_assert(sizeof(JobPayload) == 16);
-static_assert(sizeof(QueueSlot) == 32);
-static_assert(offsetof(JobDescriptor, job_id) == 4);
-static_assert(offsetof(JobDescriptor, ingress_qpc_ticks) == 8);
-static_assert(offsetof(JobPayload, user_id) == 0);
-static_assert(offsetof(JobPayload, resource_policy_id) == 4);
-static_assert(offsetof(JobPayload, session_signature) == 8);
-static_assert(offsetof(QueueSlot, descriptor) == 0);
-static_assert(offsetof(QueueSlot, payload) == 16);
-static_assert(std::is_trivially_copyable_v<QueueSlot>);
-```
+| Field | Semantics |
+|---|---|
+| type | Selects `VALIDATE_SESSION`, `TELEMETRY_LOG` or `COMPUTE_SIGN`. Unsupported values are invalid. |
+| severity | Values 1–2 map to Low, 3–4 to Medium, and 5 to High. |
+| urgency | Retained as an 8-bit score and included in diagnostics. It does not reorder requests within a queue in this POC. |
+| control | Contains the request state and reserved flags. A consumer sets Running and then a terminal state before releasing the slot. |
+| job_id | Identifies the request in diagnostics and the CSV output. The benchmark avoids duplicate IDs within one run. |
+| ingress_qpc_ticks | Captured once at ingress; used to calculate elapsed time until the terminal result is recorded. |
+| user_id | Synthetic requester/session identifier used as input to the session-validation workload. |
+| request_parameter | Compact job-specific input/metadata. Its interpretation is defined by the selected job type. |
+| session_signature | Synthetic 64-bit input for the session/bit-transformation workload; it is not a real credential or cryptographic signature. |
 
-**Packing directive policy:** no `#pragma pack` is required or planned. The member order naturally yields the intended layout for the selected x64 target; compile-time assertions are the authority. The queue allocation base shall be 64-byte aligned. Since each slot is 32 bytes, each slot address is also 32-byte aligned when the base is 64-byte aligned. Do not apply `alignas(64)` to `QueueSlot`, because doing so would change the slot stride and invalidate the two-slots-per-cache-line layout.
-
-### 4.3 Field semantics
-
-| Field | Meaning | POC use |
-|---|---|---|
-| `type` | Job operation category | Selects one of the three fixed job handlers. |
-| `severity` | Priority-classification input | Routes the request to High, Medium or Low. |
-| `urgency` | Additional urgency score, 0–255 | Recorded in diagnostics; no intra-queue reordering in this release. |
-| `control` | Packed state and flags | Lower 3 bits carry `JobState`; upper 5 bits are reserved flags. |
-| `job_id` | Request identifier | Identifies the request in diagnostics and CSV. The benchmark must avoid duplicate IDs within one run. |
-| `ingress_qpc_ticks` | Raw 64-bit QPC value | Captured at ingress and used to calculate end-to-end latency. |
-| `user_id` | Synthetic/requesting user identifier | Used by the application-level authorization lookup. |
-| `resource_policy_id` | 32-bit policy-table key | Resolves the permitted workspace/resource and operation rights. |
-| `session_signature` | 64-bit synthetic session token/input | Used by the POC session/signature workload; not a secure cryptographic credential. |
-
-`resource_policy_id` identifies preconfigured policy data held outside the queue slot. The slot contains no path strings, heap pointers or dynamically allocated payload. Policy records may contain the approved test root, configured file targets and operation permissions.
+The 64-bit ingress timestamp is stored in the descriptor's former generic 64-bit field. The payload's former 32-bit ingress timestamp field is named `request_parameter`; this avoids storing a redundant timestamp while preserving the 16-byte payload and 32-byte total slot.
 
 ### 4.4 Cache-line layout
 
-The intended density is two complete 32-byte slots per assumed 64-byte cache line. This is a storage-density choice, not a claim that producer writes and consumer reads are automatically free of coherence traffic.
+The intended storage density is two 32-byte slots per assumed 64-byte cache line.
 
 - Queue base: 64-byte aligned.
 - Slot stride: 32 bytes.
-- Each slot start: 32-byte aligned.
-- Producer tail control and consumer head control: separate 64-byte-aligned locations.
-- A 64-byte ownership/batch mode may be evaluated as an experimental variant. It is not required for the baseline because retaining a pair until both jobs complete can increase per-job waiting time and reduce flexibility.
-- The benchmark should compare compact 32-byte slots against an optional padded/paired experimental mode only if time permits. No mandatory queue-memory doubling is introduced.
+- Slot starts: 32-byte aligned when the queue base is 64-byte aligned.
+- Producer tail and consumer head: separate 64-byte-aligned control locations.
+- A two-slot ownership/publication experiment may be evaluated if time permits, but it is not required for the baseline.
+
+The two-slots-per-line layout is a density objective, not a guarantee that producer and consumer accesses will avoid cache-coherence traffic. A producer writing one slot while a consumer reads the adjacent slot can still cause line ownership transfers. The baseline retains compact slots; an experimental paired/padded variant may be compared without changing the required representation.
 
 ---
 
@@ -226,82 +220,80 @@ The intended density is two complete 32-byte slots per assumed 64-byte cache lin
 
 ### 5.1 Queue capacities
 
-| Priority queue | Severity mapping | Capacity | Mask | Memory |
+| Priority queue | Severity mapping | Capacity | Mask | Storage |
 |---|---:|---:|---:|---:|
 | High | 5 | 262,144 (`2^18`) | `0x0003FFFF` | 8 MiB |
 | Medium | 3–4 | 524,288 (`2^19`) | `0x0007FFFF` | 16 MiB |
 | Low | 1–2 | 524,288 (`2^19`) | `0x0007FFFF` | 16 MiB |
-| **Total** | | **1,310,720** | | **40 MiB** |
+| **Total** | — | **1,310,720** | — | **40 MiB** |
 
-The aggregate allocation is 1,000,000 baseline slots plus 310,720 additional slots (31.072% above the one-million baseline). The extra capacity is deliberate distributed headroom.
+The aggregate capacity represents a one-million-slot baseline plus 310,720 additional slots, or 31.072% additional headroom. This headroom is deliberately distributed among the three queues.
 
-**The extra slots are not a global reserve.** Each queue has a fixed capacity. An empty Low queue cannot donate slots to a full High queue. No cross-queue borrowing or overflow queue is part of this POC.
+**The additional capacity is not a shared reserve.** An empty Low queue cannot donate slots to a full High queue. No cross-queue borrowing or global overflow queue is part of this POC.
 
-At an aggregate input rate of 1,000,000 requests/second, 1,310,720 completely unused slots represent a theoretical 1.31072-second aggregate backlog only if requests are distributed so that no individual priority queue reaches its own capacity first. This is a capacity illustration, not a traffic guarantee.
+At an aggregate input rate of one million requests per second, 1,310,720 completely unused slots correspond to a theoretical 1.31072 seconds of buffered arrivals only under an idealized distribution that does not exhaust any individual queue first. This is a capacity illustration, not a traffic guarantee.
 
 ### 5.2 SPSC ownership
 
-Each ring buffer has exactly one producer (the ingestor) and exactly one consumer (the thread assigned to that tier).
+Each ring buffer has exactly one producer (the ingestor) and exactly one consumer (the thread assigned to that priority tier).
 
-| Queue resource | Exclusive writer/owner | Other side |
+| Resource | Owner/writer | Other side |
 |---|---|---|
-| `tail` publication counter | Ingestor | Consumer reads published value |
-| `head` reclamation counter | Consumer | Ingestor reads released value |
-| Slot before tail publication | Ingestor | Consumer must not read |
-| Slot after tail publication and before head reclamation | Consumer processes it | Ingestor must not overwrite |
-| Slot after head release is observed | Ingestor may reuse it | Consumer has finished with it |
+| Tail publication counter | Ingestor | Consumer reads published value. |
+| Head reclamation counter | Assigned consumer | Ingestor reads released value. |
+| Slot before tail publication | Ingestor | Consumer must not read it. |
+| Slot after tail publication and before head reclamation | Consumer reads/processes it | Ingestor must not overwrite it. |
+| Slot after head release is observed | Ingestor may reuse it | Consumer has completed access to it. |
 
-No generic MPMC queue, per-slot atomic state machine, or `fetch_add` reservation is required for this single-producer/single-consumer arrangement.
+No generic MPMC queue or multi-producer reservation mechanism is required for this topology.
 
 ### 5.3 Counter and index rules
 
-Use monotonically increasing unsigned 64-bit logical counters. The physical slot index is calculated as:
+The logical head and tail counters are monotonically increasing unsigned 64-bit values. Physical indexing uses the counter masked by `Capacity - 1`. Since all capacities are powers of two, this maps the logical sequence onto the fixed ring storage.
 
-```cpp
-slot_index = counter & (Capacity - 1);
-```
+Occupancy is derived from the unsigned difference between the producer's next tail position and the consumer's published head position. The invariant is that occupancy never exceeds the queue capacity. Counter wraparound shall be handled by unsigned arithmetic under this bounded-distance invariant.
 
-Queue capacities are powers of two and the mask is `Capacity - 1`. Occupancy is determined by the unsigned difference between the producer's next tail value and the consumer's published head value. The implementation shall maintain the invariant that occupancy never exceeds `Capacity`.
-
-The queue's `head` is the **reclamation position** in this POC: the consumer processes the slot in place, writes its terminal state/diagnostic result, and only then releases the slot by publishing the next head. Thus the currently executing request occupies its slot until its processing is complete. This simplifies slot ownership and permits the consumer to update `JobState` without racing with producer reuse.
+The consumer's head is the **reclamation position** in this POC. The consumer processes the slot in place, records its terminal state and result, and only then publishes the next head position. The slot therefore remains owned by the consumer until processing and result recording are complete. This permits the consumer to update the slot state without racing with producer reuse.
 
 ---
 
 ## 6. Atomic synchronization and memory ordering
 
-### 6.1 Publication protocol
+### 6.1 Publication and reclamation protocol
 
-**Producer (ingestor):**
+The queue protocol uses explicit C++ release/acquire ordering.
 
-1. Read the consumer's published `head` with `memory_order_acquire` when a refreshed head value is needed for the full check.
-2. Confirm that the destination queue has at least one free slot (or the required batch capacity).
-3. Construct/write the complete `QueueSlot` in the producer-owned tail position, setting its state to `Ready`.
-4. Publish the new tail with `memory_order_release`.
+**Producer responsibilities:**
 
-**Consumer:**
+1. Read the consumer's published head with acquire semantics when refreshing the available-capacity view.
+2. Determine whether the destination queue has space for the request or selected publication batch.
+3. Write the complete request slot in the producer-owned tail position, including its Ready state.
+4. Publish the advanced tail with release semantics.
 
-1. Read the published `tail` with `memory_order_acquire`.
-2. If the local head equals the observed tail, the queue is empty.
-3. Read the complete published slot and transition its state to `Running`.
-4. Perform authorization and the job handler; transition the slot to `Completed` or `Failed`.
-5. Write the request's diagnostic result to the consumer's private result array.
-6. Publish the next head with `memory_order_release`, making the slot reusable.
+**Consumer responsibilities:**
 
-The producer's acquire read of the consumer's released head prevents it from reusing a slot before the consumer has finished accessing it. The consumer's acquire read of the producer's released tail makes the producer's completed slot writes visible before the consumer reads the slot.
+1. Read the producer's published tail with acquire semantics.
+2. Treat equal local head and observed tail values as an empty queue.
+3. Read the published request and transition its state to Running.
+4. Execute the selected synthetic job handler.
+5. Record the terminal state and per-job diagnostic result.
+6. Publish the advanced head with release semantics, making the slot reusable.
 
-This is a C++ release/acquire synchronization design. It is compatible with x86-64 TSO, but correctness must be derived from the C++ memory model rather than relying solely on a hardware ordering assumption. The implementation should use the C++ atomic primitives explicitly.
+The producer's acquire observation of the released head prevents premature slot reuse. The consumer's acquire observation of the released tail makes the producer's preceding slot writes visible before the consumer reads them.
 
-### 6.2 Cache-line placement of indices
+This correctness argument is based on the C++ memory model. The x86-64 TSO behavior of the target machine is not a substitute for correct C++ atomic ordering.
 
-Place the producer-owned tail and consumer-owned head in separate cache-line-aligned storage. This targets false sharing on the frequently updated queue-control variables. The implementation may use a small aligned wrapper type for each atomic counter.
+### 6.2 Control-variable placement
 
-### 6.3 Atomic lock-free assumption
+The head and tail controls are independently cache-line aligned. Their independent writes must not share the same cache line. Queue slot storage remains separate from these controls.
 
-The selected x64 toolchain is expected to provide lock-free 64-bit atomics. The implementation shall verify the property on the target build (for example, with `std::atomic<std::uint64_t>::is_always_lock_free` or an equivalent runtime/build check) before describing the queue as lock-free. If the check fails, the benchmark report must disclose it rather than silently claiming lock-free behavior.
+### 6.3 Atomic capability requirement
 
-### 6.4 Busy-wait behavior
+The target build shall verify whether the 64-bit atomic counter operations used by the queue are lock-free on the project machine. The validation record shall capture the result. If the target does not provide the required lock-free behavior, the benchmark shall not describe the queue as lock-free.
 
-The POC may use a simple polling loop for empty-queue detection. Any pause/yield instruction or backoff policy must be documented and kept identical across comparable benchmark variants. The POC does not require a general event-driven wait mechanism. CPU consumption while idle should be noted when interpreting results.
+### 6.4 Consumer waiting behavior
+
+The consumer loop may use a bounded polling strategy appropriate to the benchmark. The selected strategy and any backoff behavior must be recorded because it can materially affect CPU usage, wake-up latency and throughput. The POC does not require a general-purpose blocking scheduler.
 
 ---
 
@@ -309,42 +301,41 @@ The POC may use a simple polling loop for empty-queue detection. Any pause/yield
 
 ### 7.1 Ingestor responsibilities
 
-The single ingestor thread shall:
+The single ingestor:
 
-1. Obtain or receive the next request.
-2. Validate the job type and severity range.
-3. Capture `QueryPerformanceCounter` into `ingress_qpc_ticks`.
-4. Determine the target priority queue from severity.
-5. Initialize the slot descriptor, payload and `Ready` state.
-6. Attempt bounded publication to the target queue.
-7. Update offered/accepted/capacity-rejected counters.
+- receives or generates the next request from the in-process workload source;
+- increments offered-request accounting;
+- validates the supported job type and severity range;
+- captures the ingress QPC timestamp;
+- selects the destination queue from severity;
+- checks the selected queue's available capacity;
+- writes the request record and publishes it;
+- updates accepted or rejected accounting.
 
-The benchmark may generate requests internally. The POC does not require an HTTP server or network stack.
+The benchmark workload source is in-process. No socket listener or external HTTP request parser is part of this POC.
 
 ### 7.2 Severity routing
 
-| Severity | Destination |
-|---:|---|
-| 1–2 | Low |
-| 3–4 | Medium |
-| 5 | High |
-| 0 or greater than 5 | Invalid input; not enqueued |
+| Severity | Priority tier | Destination consumer |
+|---:|---|---|
+| 1–2 | Low | Low consumer |
+| 3–4 | Medium | Medium consumer |
+| 5 | High | High consumer |
+| Outside 1–5 | Invalid | Not queued |
+
+Priority is implemented through tier classification and dedicated queue/consumer assignment. Each tier progresses independently. This is not global preemption or a single shared worker pool that always selects the highest-priority item across all tiers.
 
 ### 7.3 Load shedding
 
-If the selected queue is full, the ingestor rejects the request immediately. It shall not overwrite an unread/in-flight slot and shall not redirect the request to another queue.
+If the selected queue is full, the ingestor rejects the incoming request. It shall not overwrite an occupied slot, wait indefinitely for space, borrow capacity from another tier or place the request into a global fallback queue.
 
-The event increments the capacity-rejection counter. Diagnostics may classify it as a simulated HTTP `429 Too Many Requests` outcome, but no HTTP response is sent because no HTTP endpoint exists in this POC.
+The rejection is recorded in diagnostics/accounting as a capacity rejection and may be labelled as a simulated HTTP 429 event for the server-overload demonstration. WinTask does not send an actual HTTP response.
 
-Rejection accounting is per request. If a producer-side batch contains two requests and the target queue cannot accept them, the number of rejected requests shall reflect the number actually not published. A batch implementation must not silently discard a request that could have fitted in the remaining slot.
+### 7.4 AVX2-assisted ingestion
 
-### 7.4 AVX2 ingestion
+The intended SIMD path transfers request records in batches of two. Each `QueueSlot` is 32 bytes, matching one 256-bit AVX2 vector. Therefore, one 32-byte vector store corresponds to one complete slot, and two such stores correspond to a 64-byte pair. The two slots are not written by one 256-bit store.
 
-One `QueueSlot` is 32 bytes, equal to one 256-bit AVX2 register. One AVX2 256-bit store can transfer one slot. Two adjacent slots require two 256-bit stores (two registers/stores), not one AVX2 store.
-
-The destination queue base and slot stride are designed to make each slot address 32-byte aligned. The implementation shall confirm source/destination alignment and object-copy correctness. AVX2 is an optimization to test, not a guarantee that one source-level intrinsic completes in one CPU cycle. The scalar/reference copy path should remain available to the validator where practical.
-
-Two-slot batching is permitted when two consecutive requests are destined for the same queue. If a batch is incomplete or requests route to different queues, the implementation shall publish the eligible request(s) without waiting indefinitely to form a pair. Batch publication must preserve the SPSC ownership protocol.
+A source-level intrinsic call does not imply a fixed one-cycle completion time. Alignment, load/store throughput, cache state, execution resources and memory behavior influence the result. The AVX2 path shall be compared against a correctness-equivalent scalar/reference path. Any incomplete final pair must be handled without publishing an uninitialized slot.
 
 ---
 
@@ -352,274 +343,259 @@ Two-slot batching is permitted when two consecutive requests are destined for th
 
 ### 8.1 Thread topology and affinity
 
-The target-machine mapping is:
+The baseline consists of four dedicated threads:
 
-| Thread | Assigned processor/core |
-|---|---:|
-| Ingestor | 0 |
-| High consumer | 2 |
-| Medium consumer | 4 |
-| Low consumer | 6 |
+| Thread | Function | Configured processor/core assignment |
+|---|---|---:|
+| Ingestor | Validates, timestamps, routes and publishes requests | 0 |
+| High consumer | Processes High queue | 2 |
+| Medium consumer | Processes Medium queue | 4 |
+| Low consumer | Processes Low queue | 6 |
 
-These values are the user's selected processor mapping for the project machine and shall be centralized in configuration. `WinTaskValidator.cpp` and `WinTaskBenchmark.cpp` shall apply the agreed affinity configuration for relevant test/benchmark threads. The POC does not need an automatic topology-selection framework.
+These are the project-selected processor assignments for the target machine and shall be used consistently by the validator and benchmark. The run record shall capture the actual affinity configuration used. The POC does not implement a general-purpose CPU scheduler or dynamic affinity management.
 
-Thread creation, affinity setup and warm-up shall occur outside the timed request interval. Affinity setup failures shall fail or invalidate the associated benchmark run rather than being ignored.
+### 8.2 Consumer responsibilities
 
-### 8.2 Consumer loop
+Each consumer is responsible for exactly one priority queue. It observes published work, claims the next FIFO slot, transitions the state to Running, executes the corresponding handler, records the terminal result and releases the slot by advancing its head counter.
 
-Each consumer drains only its assigned queue. Its basic lifecycle is:
+Consumers do not steal requests from another tier. A consumer that has no work in its assigned queue does not consume another priority tier's queue.
 
-`Empty check → acquire slot → Ready → Running → authorize → process → Completed/Failed → diagnostics append → release slot`
+### 8.3 Job processing stages
 
-A consumer shall not inspect or modify another consumer's queue. No work stealing or cross-tier execution is part of the baseline.
+The synthetic processing pipeline includes:
 
-### 8.3 Job types
+1. **Latency profiling:** read the ingress QPC timestamp and capture the terminal QPC timestamp to calculate ingress-to-completion latency.
+2. **Synthetic session/signature transformation:** process the 64-bit session input with deterministic bitwise operations and rotations. This is a controlled CPU workload and does not perform cryptographic verification.
+3. **Job-type handling:** execute the deterministic operation associated with `VALIDATE_SESSION`, `TELEMETRY_LOG` or `COMPUTE_SIGN`.
+4. **Urgency retention:** preserve the urgency value in the request and diagnostic record.
+5. **Terminal accounting:** record Completed or Failed and publish the corresponding diagnostic result before releasing the queue slot.
 
-| Job type | POC behavior | Authorization relationship |
-|---|---|---|
-| `VALIDATE_SESSION` | Validates a synthetic session/token test record using `user_id` and `session_signature`, then performs a small deterministic CPU workload. | Checks the configured policy for the session/resource read operation where a resource is configured. |
-| `TELEMETRY_LOG` | Builds a compact telemetry/event record. The benchmark hot path records results in preallocated memory and exports them after the run. | Requires the configured append/write permission for a telemetry destination in filesystem integration tests. |
-| `COMPUTE_SIGN` | Performs deterministic 64-bit rotation/mixing work on the input fields to simulate a signature/computation workload. | Requires the configured read/write permissions for its test input/output resource where file operations are exercised. |
+The originally estimated 300–700 ns workload is not hard-coded as an assumed duration. The measured result depends on the actual handler operations and test machine.
 
-The 64-bit transformation is **not cryptographic verification, authentication or a secure signature algorithm**. It is a deterministic CPU-work simulation. The POC must not claim security based on `std::rotl`, `std::rotr`, XOR or multiplication alone. A future security-oriented version may replace it with a reviewed keyed MAC/signature implementation and an appropriately sized key/digest representation; that is outside the current POC.
+### 8.4 Urgency semantics
 
-The proposed 300–700 ns total processing interval is not hardcoded as a delay. The handler performs actual deterministic operations, and the measured cost is reported. Artificial sleeps are not permitted in the throughput benchmark.
-
-### 8.4 Urgency field
-
-`urgency` is retained and recorded. It does not reorder FIFO requests, change priority queues, bypass authorization or suppress diagnostics in this POC. Any urgency-based local reordering is post-POC work and would require a separate scheduling policy and fairness tests.
+Urgency is retained as an 8-bit field and included in diagnostics. It does not reorder the FIFO queue, interrupt a running job, skip processing stages or suppress telemetry in the POC. This keeps the queue's FIFO property and the measurement path consistent. Any future urgency-based scheduling policy requires a separate design revision and measurement.
 
 ---
 
-## 9. File and folder access-control subsystem
+## 9. Timestamping, diagnostics and reporting
 
-### 9.1 Scope and trust boundary
+### 9.1 Ingress timestamp and latency
 
-WinTask implements an application-level access policy for file/folder operations initiated by WinTask's own job handlers. It does not change NTFS ACLs and does not create a separate Windows security identity for every job.
+The descriptor stores the 64-bit raw QPC value captured by the ingestor. QPC frequency is obtained once during initialization and reused for conversions during the run.
 
-The initial implementation uses a controlled test workspace and a preconfigured policy table. The request carries only `user_id` and `resource_policy_id`; paths and permission sets remain outside the 32-byte slot.
+For a request with ingress counter value `QPC_in` and terminal counter value `QPC_out`:
 
-### 9.2 Policy lookup
+- elapsed ticks = `QPC_out - QPC_in`;
+- elapsed seconds = elapsed ticks divided by the cached QPC frequency;
+- reported latency = elapsed seconds converted to microseconds, retaining fractional precision.
 
-The authorization service resolves `(user_id, resource_policy_id)` to a policy record containing:
+The reported quantity is **ingress-to-terminal-completion/failure latency**. It includes time spent waiting in the priority queue and time spent in the consumer's processing stages. It is not merely handler execution time.
 
-- Approved workspace root or configured resource paths.
-- Permitted operation bits (Read, Create, Write/Append, as applicable).
-- Active/disabled policy state for the test configuration.
+### 9.2 Per-consumer diagnostics storage
 
-The required operation is derived from the job's actual file operation. Authorization must occur before the operation. All file operations performed by WinTask job handlers must pass through the policy service.
+Each consumer writes result records into its own preallocated diagnostics array. The arrays are prepared before the measured run and are not shared for concurrent append operations.
 
-### 9.3 Path constraints
+The minimum per-job result fields are:
 
-The POC shall use test-owned directories/files only. It shall reject paths outside the approved root, including straightforward `..` traversal attempts. The implementation should normalize/resolve paths consistently and avoid treating a string-prefix match as sufficient proof that a path is inside the approved directory. Reparse-point/symlink edge cases should be documented as a known POC limitation unless they are specifically tested and handled.
+- Job ID;
+- priority class;
+- urgency;
+- ingress-to-terminal-completion latency in microseconds;
+- terminal status.
 
-### 9.4 Benchmark separation
+The diagnostics design shall avoid dynamic allocation and CSV formatting in the steady-state consumer path. Capacity shall be sufficient for the configured benchmark workload or the run shall be marked invalid if result storage cannot represent every required terminal record.
 
-Filesystem access can dominate the cost of a high-rate in-memory dispatch benchmark. Therefore:
+### 9.3 Aggregate counters
 
-- The primary throughput profile shall use preloaded/in-memory policy records and deterministic in-memory job work, measuring dispatch and authorization lookup without synchronous per-request disk I/O.
-- Separate authorization integration tests shall perform actual controlled file/folder operations in the sandbox and verify allowed/denied outcomes.
-- Results from the in-memory dispatch profile must not be described as one million real disk operations per second.
+WinTask shall track at least:
 
----
+- total requests offered;
+- valid requests offered;
+- accepted requests;
+- successfully completed requests;
+- failed requests;
+- invalid requests;
+- capacity-rejected requests.
 
-## 10. Timestamping, latency and diagnostics
+After all accepted work has reached a terminal state and the queues have drained, the following accounting identities shall hold:
 
-### 10.1 Ingress timestamp
+- valid requests offered = accepted requests + capacity-rejected requests;
+- accepted requests = successfully completed requests + failed requests.
 
-At ingress, capture a raw 64-bit `QueryPerformanceCounter` value and store it in `JobDescriptor::ingress_qpc_ticks`. Query `QueryPerformanceFrequency` once during initialization and cache the result.
+Invalid requests are counted separately and are not included in the valid-offer identity.
 
-The QPC tick delta is:
+### 9.4 CSV output
 
-`latency_ticks = completion_qpc_ticks - ingress_qpc_ticks`
+The benchmark exports `TestResults.csv` after ingestion is stopped, all accepted work is drained, all consumers have terminated and diagnostics arrays are stable.
 
-Convert to microseconds using the cached frequency:
+Minimum per-job columns:
 
-`latency_us = latency_ticks * 1,000,000 / qpc_frequency`
+`JobID, PriorityClass, Urgency, LatencyMicroseconds, Status`
 
-Use an arithmetic approach that avoids unintended integer overflow and preserves fractional microseconds in the CSV. The timestamp measures **end-to-end ingress-to-terminal-completion latency**, which includes queue waiting, authorization and the handler work. It is not solely consumer execution time.
+The final output may include a separate aggregate summary or summary section/file if needed, but the per-job record schema remains stable for the user's offline Python analysis workflow. CSV generation is outside the measured hot path.
 
-### 10.2 Per-consumer diagnostics
+### 9.5 Completed throughput
 
-Each consumer writes results only to its own preallocated diagnostics array. No consumer writes into another consumer's result region. The arrays are sized before the benchmark begins and do not grow during timed processing.
+Completed throughput is calculated as:
 
-A compact record should retain at least:
+**Successfully completed requests ÷ measurement duration in seconds.**
 
-- `job_id`
-- Priority tier
-- `urgency`
-- Terminal status (Completed or Failed, with an authorization-denied reason where applicable)
-- Raw latency QPC ticks or a value sufficient to export fractional `LatencyMicroseconds`
-
-Diagnostics arrays must have sufficient capacity for the maximum number of accepted requests expected in the run. If an array capacity is reached, this must be treated as a benchmark configuration failure; diagnostics must not silently overwrite earlier records.
-
-### 10.3 Aggregate counters
-
-Maintain the following aggregate counts:
-
-- `RequestsOffered`
-- `RequestsAccepted`
-- `RequestsCompleted` (successful terminal completions)
-- `RequestsRejectedCapacity`
-
-Per-job diagnostic status provides the failed/denied outcomes. At a fully drained run, the accounting identity should be:
-
-`RequestsAccepted = RequestsCompleted + RequestsFailed`
-
-and:
-
-`RequestsOffered = RequestsAccepted + RequestsRejectedCapacity`
-
-These identities assume the benchmark offers only validly formed requests. Invalid-input test cases are handled separately by validation tests and shall not be mixed into the capacity-rejection count.
-
-### 10.4 CSV output
-
-The primary per-job result file is `BenchmarkResults.csv`
- Minimum columns:
-
-`JobID,PriorityClass,Urgency,LatencyMicroseconds,Status`
-
-A run-summary section/file or accompanying summary output shall retain offered, accepted, successfully completed, rejected-capacity and failed counts, elapsed benchmark time, and completed throughput. If a single CSV is used, the summary row format must be documented so it cannot be confused with per-job rows.
-
-CSV output is produced after workers stop and the result arrays are stable. No CSV formatting, allocation or file writing occurs on the measured consumer hot path.
-
-### 10.5 Throughput definition
-
-`CompletedThroughput = RequestsCompleted / MeasurementDurationSeconds`
-
-The report shall also show offered, accepted and rejected rates or counts so overload shedding cannot inflate the completed-throughput claim. A run that has not drained all accepted jobs is incomplete and cannot be used for final completed-throughput reporting.
+The report shall show offered, accepted, completed, failed and rejected counts alongside the throughput result. A run that has not drained all accepted requests is incomplete and shall not be presented as a final completed-throughput result.
 
 ---
 
-## 11. Cache and SIMD evaluation
+## 10. Cache, alignment and SIMD evaluation
 
-### 11.1 Baseline layout
+### 10.1 Baseline memory arrangement
 
-The baseline retains 32-byte slots and 64-byte-aligned queue storage. This yields two slots per assumed 64-byte cache line and a 40 MiB aggregate ring-buffer footprint.
+The baseline retains 32-byte request slots and 64-byte-aligned queue backing storage. This produces two slot positions per assumed 64-byte cache line and an aggregate 40 MiB queue-storage footprint.
 
-### 11.2 Control-line separation
+### 10.2 Control-line separation
 
-Head and tail atomics shall occupy separate cache lines. This is mandatory in the baseline because the two counters are independently written by different cores.
+Head and tail counters are placed on separate cache-line-aligned locations. This is part of the baseline design because they are independently written by different threads.
 
-### 11.3 Slot-line interference experiment
+### 10.3 Slot-line interference consideration
 
-The 32-byte slot arrangement may permit the producer and consumer to touch different halves of one cache line near the producer/consumer boundary. Cache coherence operates at cache-line granularity, so this may create avoidable line ownership transfers.
+A producer and consumer can access different 32-byte slots that occupy the same 64-byte cache line. Although their C++ objects are distinct, cache coherence can still transfer ownership at cache-line granularity.
 
-The POC shall preserve the 32-byte representation. If time permits, benchmark one experimental mitigation:
+The initial implementation retains the compact 32-byte format. If the 10-day schedule permits, a paired-ownership or padded experimental variant may be evaluated. Such a variant is optional and shall not displace correctness work. It must be compared using both throughput and latency because retaining two requests as one ownership unit can delay reclamation of the first request.
 
-- Producer writes two adjacent same-queue slots and publishes the pair together.
-- Consumer retains/releases the two-slot group together.
+### 10.4 SIMD evaluation
 
-This is not a required baseline behavior. It may increase the time a completed first item occupies a slot while the second item is processed. The experiment must compare throughput and latency, not only store count.
-
-### 11.4 AVX2 claims
-
-AVX2 is 256 bits wide. A 32-byte slot corresponds to one 256-bit vector. Two slots occupy 64 bytes and require two 256-bit stores. Source-level intrinsic count shall not be translated into an assumed one-cycle completion time. Report the measured result on the target machine.
+AVX2 is 256 bits wide, matching the size of one 32-byte slot. Two complete slots occupy 64 bytes and require two 256-bit transfers. The benchmark shall compare the AVX2-assisted path with a reference copy path using identical request contents and workloads. No fixed instruction-cycle claim is part of the specification.
 
 ---
 
-## 12. Source-file and module organization
+## 11. Source-file and module organization
 
-The POC uses a small, flat source layout. No extra directory hierarchy is required.
+The project uses the following six-file source layout. The structure is intentionally compact: logical responsibilities are grouped where their implementations are small, while the engine and evaluation components remain clearly separated.
 
 | File | Responsibility |
 |---|---|
-| `WinTaskTypes.hpp` | `JobType`, `JobState`, descriptor, payload, queue slot, state/flag helpers and compile-time layout assertions. |
-| `WinTaskConfig.hpp` | Queue capacities/masks, severity routing constants, batch width, target processor assignments and benchmark configuration. |
-| `WinTaskQueues.hpp` | Fixed-capacity ring buffer, aligned head/tail controls, enqueue/publication and consumer/reclamation operations. |
-| `WinTaskAuthorization.hpp` | Resource-policy records, `(user_id, resource_policy_id)` lookup and permission checks for controlled test resources. |
-| `WinTaskDiagnostics.hpp` | Per-consumer result records/arrays, counters, latency conversion and post-run CSV export. |
-| `WinTaskPlatform.hpp` | Windows QPC/QPF wrappers, thread-affinity wrapper and any narrowly scoped Windows-specific support. |
-| `WinTaskEngine.hpp` | Ingestor, priority routing, consumer loops, three job handlers, load shedding, lifecycle and run/shutdown orchestration. |
-| `WinTaskValidator.cpp` | Standalone validation executable: layout, queue behavior, routing, synchronization, authorization, state transitions, accounting and shutdown tests. |
-| `WinTaskBenchmark.cpp` | Standalone end-to-end demonstration and benchmark: generate workload, pin threads, run the engine, drain work, collect metrics and export CSV. |
+| `WinTask.cpp` | The sole application entry point. Initializes the command-line interface and returns its exit status. It contains no separate engine, validator or benchmark implementation. |
+| `SystemInterface.hpp` | Provides the command-line menu and dispatches the user's selection to validation, benchmarking, full evaluation or exit. It imports the validator and benchmark interfaces. |
+| `WinTaskValidator.hpp` | Contains the 40 documented test cases, their grouped execution flow, pass/fail accounting and validation summary. It exercises the same engine used by the benchmark. |
+| `WinTaskBenchmark.hpp` | Owns workload generation and benchmark orchestration, uses the engine, applies the configured affinity plan, collects measurements and exports `TestResults.csv`. |
+| `WinTaskUtilities.hpp` | Groups small shared platform/utilities that do not justify separate files, including QPC timing support, configured thread-affinity support and narrowly scoped common helpers. It does not own the request model or scheduler. |
+| `WinTaskEngine.hpp` | The core execution engine: configuration, job/state types, descriptor/payload/slot model, internal SPSC queue implementation, priority queues, ingestion/routing, consumer loops, synthetic job handlers, aggregate counters, per-consumer diagnostics storage and engine lifecycle. It uses the shared utilities. |
 
-### 12.1 Is `WinTask.cpp` required?
+### 11.1 Conceptual dependency arrangement
 
-**No separate `WinTask.cpp` is required for the current POC.** `WinTaskBenchmark.cpp` is the end-to-end executable entry point and demonstrates the integrated WinTask engine. `WinTaskValidator.cpp` is the independent correctness executable. The reusable engine implementation resides in `WinTask.Engine.hpp` and its supporting headers.
+The intended dependency direction is:
 
-A separate `WinTask.cpp` would become justified only if WinTask later gains a distinct application/service entry point, an interactive server-control mode or a runtime executable that is intentionally separate from the benchmark harness. It should not be added merely to duplicate the benchmark's simulation.
+- `WinTask.cpp` initializes `SystemInterface`.
+- `SystemInterface.hpp` imports `WinTaskValidator.hpp` and `WinTaskBenchmark.hpp`.
+- `WinTaskValidator.hpp` and `WinTaskBenchmark.hpp` both depend on `WinTaskEngine.hpp`.
+- `WinTaskEngine.hpp` depends on `WinTaskUtilities.hpp` for shared platform support.
+- `WinTaskUtilities.hpp` does not depend on the engine, validator, benchmark or interface.
 
-### 12.2 Build outputs
+The engine does not import or depend on the CLI, validator or benchmark. The validator and benchmark use the same engine implementation rather than maintaining separate runtime implementations.
 
-- `WinTaskValidator.exe`
-- `WinTaskBenchmark.exe`
-- `BenchmarkResults.csv` (generated after a completed benchmark run)
+This file layout is an initial conceptual overview of how the project should be organized and how its responsibilities should interact. It is not source code or a commitment to a particular class hierarchy. Small related types and operations may remain grouped within their assigned file; additional files shall only be introduced when a concrete implementation or reuse requirement justifies them.
 
-Generated results are not source files and should not be committed as if they were implementation modules. Preserve representative results separately when preparing the report.
+### 11.2 Command-line choices
+
+The command-line interface shall expose four choices:
+
+1. Run Validator — execute the 40 documented test cases and show the validation summary.
+2. Run Benchmark — execute the configured workload and export benchmark results.
+3. Run Full Evaluation — run validation first and start the benchmark only if validation succeeds.
+4. Exit — terminate the application cleanly.
+
+The menu coordinates these operations; it does not contain queue, scheduling or request-processing logic.
+
+### 11.3 Build outputs
+
+- `WinTask.exe` — the single application containing the CLI, validator, benchmark and engine.
+- `TestResults.csv` — generated benchmark output after a completed run.
+
+The validator's test summary may be displayed in the console. No separate validator or benchmark executable is required for this POC.
 
 ---
 
-## 13. Build and runtime configuration
+## 12. Build and runtime configuration
 
 - Target: Windows x64.
-- Compiler: Clang 23.1.5 with `x86_64-pc-windows-msvc` target.
-- Standard library: MSVC STL supplied with the selected Visual Studio 2026 Build Tools installation.
-- Language baseline: C++26
-- ISA: AVX2 for the planned SIMD path on the target machine.
-- OS APIs: Windows performance counter and thread-affinity facilities.
+- Compiler: Clang 23.1.5 targeting `x86_64-pc-windows-msvc`.
+- Standard library: MSVC STL from the selected Microsoft Build Tools for Visual Studio 2026 installation.
+- Language baseline: C++20; C++23 may be enabled for specific supported features.
+- SIMD target: AVX2 for the planned request-slot transfer path on the project machine.
+- Platform timing: Windows performance-counter facilities.
+- Processor affinity: project-selected mapping of ingestor to 0 and High/Medium/Low consumers to 2/4/6, as recorded for the target machine.
 - GCC 16.1 is not part of this project's primary build/validation matrix.
-- Build mode for benchmark: optimized/release configuration. Correctness validation may additionally run in a debug/instrumented configuration.
+- Benchmark measurements shall use an optimized Release build. Correctness validation may additionally be performed in an instrumented or Debug build; timings from different build modes shall not be compared as equivalent.
 
-The precise compiler, STL, SDK, linker and Windows build versions used for the final recorded benchmark must be written into the run record. Do not compare debug and release timings as equivalent results.
+The final run record shall capture the compiler version, target, STL/toolset, Windows build, CPU, build configuration, affinity mapping, workload distribution and measurement duration.
 
 ---
 
-## 14. Known limitations and interpretation rules
+## 13. Known limitations and interpretation rules
 
 1. The three queues have fixed capacities and cannot borrow unused capacity from one another.
-2. A dedicated consumer per priority tier means a busy Low queue does not use idle High/Medium consumer capacity.
-3. Strict queue-tier separation can produce per-tier imbalance; aggregate free slots do not guarantee that a particular tier can accept more work.
-4. FIFO is maintained inside each queue. `urgency` does not reorder a queue in the POC.
-5. The system simulates a server request workload in-process; it does not implement network ingress or an HTTP server.
-6. HTTP 429 is a simulated capacity-rejection classification, not a transmitted protocol response.
-7. The session/signature operation is synthetic and provides no cryptographic security.
-8. File authorization is application-level and applies only to WinTask-mediated operations.
-9. The primary throughput workload uses in-memory policy lookup and synthetic processing; actual filesystem integration is validated separately.
-10. One million requests/second is not a promised outcome. A result is meaningful only with its workload distribution, run duration, CPU affinity, build configuration and accounting counts.
-11. The 64-byte cache-line assumption is the project's target-machine optimization assumption; the implementation should label it as such rather than presenting it as a universal guarantee for every processor.
-12. The 300–700 ns processing estimate is provisional until measured.
+2. A dedicated consumer per priority tier means an idle consumer does not process another tier's requests.
+3. Priority is represented by classification into dedicated queues and consumers; there is no global preemption or shared-pool priority arbitration.
+4. FIFO is maintained within each queue. Urgency is recorded but does not reorder requests in this POC.
+5. The system simulates server-style request processing in-process; it does not implement network ingress or an HTTP server.
+6. HTTP 429 is a simulated capacity-rejection label, not a transmitted protocol response.
+7. The session/signature transformation is synthetic and provides no cryptographic security.
+8. The 1,000,000 requests/second figure is a stretch target, not a promised outcome. Results are meaningful only with their workload, run duration, processor affinity, build configuration and accounting counts.
+9. The 64-byte cache-line assumption is the target-machine optimization assumption, not a universal guarantee for every processor.
+10. The original 300–700 ns processing estimate is provisional until measured.
+11. The additional 310,720 slots are distributed headroom, not capacity that can be dynamically reassigned between queues.
+12. Optional cache-line ownership experiments are not required for acceptance of the baseline POC.
 
 ---
 
-## 15. Acceptance criteria for the POC
+## 14. POC acceptance criteria
 
 The POC is ready for its final demonstration when:
 
-- All data-layout assertions pass and `QueueSlot` is exactly 32 bytes.
-- All three ring buffers initialize with the specified capacities and masks.
-- The producer routes valid severity values to the correct queue.
-- The SPSC queues pass FIFO, wraparound, full and empty tests.
-- Concurrent stress validation shows no duplicate, lost or corrupted accepted request IDs.
-- Queue-full conditions reject rather than overwrite requests.
-- Each consumer processes only its assigned queue.
-- State transitions and terminal status records are correct.
-- File-policy allow/deny tests pass inside the controlled workspace.
-- QPC-based ingress-to-completion latency is exported with fractional-microsecond precision.
-- Diagnostics arrays do not overflow for the configured benchmark run.
-- Offered/accepted/completed/rejected/failed accounting reconciles after drain.
-- Both executables build with the selected Clang/MSVC STL toolchain.
-- The benchmark exports `BenchmarkResults.csv` after all consumers terminate.
-- Performance results state the workload and do not confuse offered rate with completed throughput.
+- [ ] The request structures satisfy the documented size and offset requirements; the complete slot is 32 bytes.
+- [ ] All three ring buffers initialize with the specified capacities and masks.
+- [ ] Queue backing storage and control variables satisfy the documented alignment requirements.
+- [ ] The ingestor routes valid severity values to the correct queue and rejects invalid values.
+- [ ] The SPSC queues pass empty, FIFO, full, wraparound, publication and reclamation validation.
+- [ ] Concurrent stress validation detects no lost, duplicated or corrupted accepted request IDs.
+- [ ] Each consumer processes only its assigned queue.
+- [ ] State transitions and terminal result records are correct.
+- [ ] Queue-full conditions reject rather than overwrite requests.
+- [ ] QPC-based ingress-to-terminal latency is calculated and exported with fractional-microsecond precision.
+- [ ] Diagnostics storage can represent every terminal result in the configured run.
+- [ ] Offered/accepted/completed/failed/invalid/rejected accounting reconciles after drain.
+- [ ] The configured processor-affinity mapping is applied and verified.
+- [ ] Both the scalar/reference and AVX2 request-copy paths, if enabled, preserve identical request data.
+- [ ] The CLI's validation, benchmark, full-evaluation and exit choices behave as specified.
+- [ ] `WinTask.exe` builds with the selected Clang/MSVC STL toolchain.
+- [ ] The benchmark exports a valid `TestResults.csv` after all consumers terminate.
+- [ ] Performance results state the workload and do not confuse offered rate with completed throughput.
 
-## 16. External technical references
+---
 
-These references describe relevant platform/language behavior; the project-specific architecture and requirements above remain the controlling specification.
+## 15. Technical references
 
-1. Microsoft Learn — [QueryPerformanceFrequency](https://learn.microsoft.com/en-us/windows/win32/api/profileapi/nf-profileapi-queryperformancefrequency): performance-counter frequency is fixed at system boot and can be cached after initialization.
-2. Microsoft Learn — [QueryPerformanceCounter](https://learn.microsoft.com/en-us/windows/win32/api/profileapi/nf-profileapi-queryperformancecounter): high-resolution performance-counter acquisition.
-3. C++ reference — [std::memory_order](https://en.cppreference.com/w/cpp/atomic/memory_order): acquire/release synchronization and visibility of non-atomic data published through an atomic.
-4. Microsoft Learn — [SetThreadAffinityMask](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask): Windows thread processor affinity API.
+The following platform and language references support the implementation decisions. The project-specific requirements in this document remain the controlling design baseline.
 
-## 17. Change-control notes
+1. Microsoft Learn — [QueryPerformanceCounter](https://learn.microsoft.com/en-us/windows/win32/api/profileapi/nf-profileapi-queryperformancecounter): high-resolution performance-counter acquisition.
+2. Microsoft Learn — [QueryPerformanceFrequency](https://learn.microsoft.com/en-us/windows/win32/api/profileapi/nf-profileapi-queryperformancefrequency): performance-counter frequency acquisition.
+3. C++ reference — [std::memory_order](https://en.cppreference.com/w/cpp/atomic/memory_order): acquire/release synchronization and visibility of data published through atomics.
+4. Microsoft Learn — [SetThreadAffinityMask](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask): Windows thread processor-affinity API.
 
-The following changes are explicitly part of this document baseline:
+---
 
-- `custom_field` is semantically assigned to `ingress_qpc_ticks` (64-bit QPC timestamp).
-- The payload's former 32-bit `ingress_timestamp` position is assigned to `resource_policy_id`.
-- `QueueSlot` remains 32 bytes; no packing pragma is used.
-- `WinTask.cpp` is omitted from the POC; benchmark and validator are the two executable entry points.
-- Urgency remains recorded metadata but does not reorder FIFO queues.
-- The POC uses application-level file authorization and synthetic computation, not cryptographic verification or native per-job Windows security isolation.
+## 16. Change-control notes
 
-Any later change to slot size, queue capacities, ownership model, memory-order protocol, job-state semantics or benchmark accounting must be recorded here before implementation is treated as conforming to this specification.
+This revision establishes the following baseline:
+
+- WinTask is a **High-Performance Priority-Based Task Scheduler & Processor for Windows**.
+- The six-file layout is `WinTask.cpp`, `SystemInterface.hpp`, `WinTaskValidator.hpp`, `WinTaskBenchmark.hpp`, `WinTaskUtilities.hpp` and `WinTaskEngine.hpp`.
+- `WinTaskEngine.hpp` owns the core engine and internal SPSC implementation.
+- `SystemInterface.hpp` is the CLI entry to validation, benchmarking, full evaluation and exit.
+- The validator and benchmark use the same engine implementation.
+- The 40-case validation baseline is defined in the companion Test Case Specification & Execution Record.
+- The request slot remains 32 bytes; its 64-bit descriptor timestamp is the ingress QPC value.
+- The payload's 32-bit middle field is request-specific metadata, not a second timestamp or a policy identifier.
+- Urgency remains diagnostic metadata; FIFO order is retained inside each priority queue.
+- The POC retains three fixed SPSC queues, one ingestor and three dedicated consumers. No global overflow queue, Signal Tree or dynamic worker pool is introduced.
+
+Any later change to slot size, queue capacities, ownership, memory ordering, thread topology, job semantics, source-file responsibilities or throughput accounting shall be recorded in this document before the implementation is considered conformant to this baseline.
