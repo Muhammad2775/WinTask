@@ -40,7 +40,7 @@ The one-million-requests-per-second figure is a target to measure, not a guarant
 - Exercise three representative synthetic job types: session validation, telemetry processing and signature/bit-transformation computation.
 - Collect per-consumer results without performing CSV formatting or file output in the measured processing path.
 - Evaluate the effect of cache-line placement and AVX2-assisted slot transfer rather than assuming an optimization is beneficial.
-- Keep the engine and its queue mechanism sufficiently self-contained to support later investigation or extraction into PDSTL.
+- Keep the engine and its queue mechanism sufficiently self-contained to support later investigation or extraction into other applications.
 
 ### 1.3 Scope boundaries and exclusions
 
