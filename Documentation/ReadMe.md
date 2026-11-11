@@ -115,10 +115,10 @@ This is an initial conceptual overview of the planned organization and interacti
 
 The command-line interface is planned to provide four options:
 
-1. **Run Validator** — execute the 40 documented test cases and display the validation summary.
-2. **Run Benchmark** — execute the configured workload and export benchmark results.
-3. **Run Full Evaluation** — run validation first and start the benchmark only if validation succeeds.
-4. **Exit** — terminate the application cleanly.
+1. **Run Validator**: Executes the 40 documented test cases and display the validation summary.
+2. **Run Benchmark**: Executes the configured workload and export benchmark results.
+3. **Run Full Evaluation**: Runs the validation first and start the benchmark only if validation succeeds.
+4. **Exit**: Terminates the application cleanly.
 
 The interface coordinates the selected operation; request ingestion, queue management and task processing remain responsibilities of the engine.
 
@@ -150,7 +150,7 @@ WinTask is planned as a single application with `WinTask.cpp` as its sole transl
 
 ## Running WinTask
 
-After a successful build, launch `WinTask.exe` and select one of the four CLI options. The benchmark option generates `TestResults.csv` after the workload has completed, accepted requests have drained and all consumer threads have terminated.
+After a successful build, launch `WinTask.exe` and select one of the four CLI options. The benchmark option generates `BenchmarkResults.csv` after the workload has completed, accepted requests have drained and all consumer threads have terminated.
 
 ## Validation
 
@@ -192,7 +192,7 @@ A workload that is merely offered or accepted is not evidence of completed throu
 
 ## Future Development
 
-Potential post-POC work may include further evaluation of cache-line ownership strategies, alternative queue and scheduling policies, improved memory management, additional workload types and investigation of whether the independently useful queue or execution components can be adapted for PDSTL. Such work is outside the current proof-of-concept acceptance scope unless explicitly added through a later design revision.
+Potential post-POC work may include further evaluation of cache-line ownership strategies, alternative queue and scheduling policies, improved memory management, additional workload types and investigation of whether the independently useful queue or execution components can be adapted for other applications. Such work is outside the current proof-of-concept acceptance scope unless explicitly added through a later design revision.
 
 ## Disclaimer
 
