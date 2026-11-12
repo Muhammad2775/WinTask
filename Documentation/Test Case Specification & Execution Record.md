@@ -1,7 +1,7 @@
-# WinTask — Test Case Specification & Execution Record
+# WinTask: Test Case Specification & Execution Record
 
 **Project:** WinTask — High-Performance Priority-Based Task Scheduler & Processor for Windows  
-**Document version:** 0.2 — Revised 40-case Proof-of-Concept baseline  
+**Document version:** 0.3 — 40-case Proof-of-Concept baseline with offline visualization  
 **Status:** Prepared for execution; all tests are initially NOT RUN  
 **Academic context:** Semester 5 — Operating Systems (Lab Project)  
 **Platform:** Windows x64  
@@ -41,6 +41,9 @@ Complete this section before recording final results. The environment should rem
 | AVX2 availability | NOT VERIFIED |
 | 64-bit atomic lock-free result | NOT VERIFIED |
 | QPC frequency | NOT RECORDED |
+| Python version | NOT RECORDED |
+| Matplotlib version | NOT RECORDED |
+| Visualizer.py execution status | NOT RUN |
 | Processor-affinity mapping | Ingestor 0; High 2; Medium 4; Low 6 (verify during test run) |
 | Source revision | NOT RECORDED |
 | Test date/time | NOT RECORDED |
@@ -59,7 +62,7 @@ Complete this section before recording final results. The environment should rem
 | D | Concurrency and lifecycle | TC-017–TC-020 | 4 |
 | E | Load shedding and accounting | TC-021–TC-024 | 4 |
 | F | Job handlers and request semantics | TC-025–TC-032 | 8 |
-| G | Windows platform and diagnostics | TC-033–TC-035 | 3 |
+| G | Windows platform, diagnostics and visualization | TC-033–TC-035 | 3 |
 | H | Performance and scalability | TC-036–TC-040 | 5 |
 | **Total** | | **TC-001–TC-040** | **40** |
 
@@ -71,8 +74,11 @@ Complete this section before recording final results. The environment should rem
 - Queue-full behavior shall be tested without relying on timing luck; controlled fill/drain conditions shall be used.
 - Performance tests shall use an optimized Release build, a recorded affinity mapping, a defined workload and a measured interval.
 - Comparative tests shall use the same input sequence and workload settings for each compared method.
-- CSV export shall occur after accepted work has drained and consumer threads have terminated.
+- `BenchmarkResults.csv` and `BenchmarkSummary.csv` export shall occur after accepted work has drained and consumer threads have terminated.
+- `Visualizer.py` shall be executed manually after the C++ benchmark export; it shall not run in the measured request-processing interval.
 - A failed correctness precondition invalidates dependent performance results; a benchmark must not be reported as successful if requests are silently lost or accounting does not reconcile.
+- The visualizer shall not present an incomplete or invalid run as a valid completed benchmark.
+- Latency percentiles shall use the nearest-rank method over successful (`Completed`) samples, grouped independently by Overall, High, Medium and Low.
 - Optional experiments that are not part of the baseline 40 cases shall be clearly labelled exploratory and shall not replace a required case.
 
 ### 3.3 Status vocabulary
@@ -161,13 +167,13 @@ Complete this section before recording final results. The environment should rem
 
 ---
 
-## 10. Group G — Windows platform and diagnostics (3 tests)
+## 10. Group G — Windows platform, diagnostics and visualization (3 tests)
 
 | ID | Test case | Procedure / coverage | Expected result | Status |
 |---|---|---|---|---|
 | TC-033 | Thread-affinity validation | Start the ingestor and each consumer; inspect the configured affinity of all four threads. | Ingestor uses configured processor 0; High, Medium and Low consumers use configured processors 2, 4 and 6 respectively. The actual mapping is recorded. | NOT RUN |
 | TC-034 | QPC timing and latency conversion | Verify QPC frequency initialization, monotonic ingress/terminal samples and conversion of a known tick delta to fractional microseconds. | Frequency is valid and cached; conversion is correct within expected numeric precision; measured latency is ingress-to-terminal rather than handler-only time. | NOT RUN |
-| TC-035 | Diagnostics isolation and CSV validation | Run representative mixed jobs; verify consumer-isolated result records, terminal record completeness, output schema, row count, numeric parsing and aggregate reconciliation. | Every accepted request reaching a terminal result has one corresponding diagnostic record; `TestResults.csv` is generated after shutdown and is parseable by the offline analysis workflow. | NOT RUN |
+| TC-035 | Diagnostics, dual-CSV and offline visualization validation | Run a representative mixed workload; verify consumer-isolated terminal records; inspect `BenchmarkResults.csv` and `BenchmarkSummary.csv`; validate matching RunIDs, required columns, numeric fields, per-request row counts and accounting reconciliation. Execute `Visualizer.py` against the generated files. Also run a controlled fixture with 100 successful samples per priority queue, using latency values 1–100 µs in each queue. Under nearest-rank calculation, each queue and the combined Overall group must report P50=50 µs, P90=90 µs, P95=95 µs and P99=99 µs. Include an empty-successful-sample group to verify unavailable/blank handling, and verify all chart outputs. | Every accepted terminal request has exactly one per-request row; the summary contains Overall/High/Medium/Low rows and reconciled counts; the visualizer produces `Visualizations/LatencyPercentiles.csv` and all required PNGs; P50/P90/P95/P99 match the known fixture; no-sample groups are unavailable rather than zero; source CSVs remain unchanged. | NOT RUN |
 
 ---
 
@@ -185,16 +191,18 @@ Performance tests shall use an optimized Release build after initialization and 
 
 ---
 
-## 12. Required benchmark summary
+## 12. Required benchmark summary and output validation
 
-Complete this summary for each final benchmark run.
+Complete this summary for each final benchmark run. Aggregate counters and timing come from `BenchmarkSummary.csv`; latency distribution statistics are derived by `Visualizer.py` from `BenchmarkResults.csv`.
+
+### 12.1 Run-level workload, accounting and timing
 
 | Metric | Result |
 |---|---|
-| Workload request count | NOT RECORDED |
+| Run ID / Run status | NOT RECORDED |
+| Workload profile | NOT RECORDED |
 | Severity distribution | NOT RECORDED |
 | Job-type distribution | NOT RECORDED |
-| Measurement duration | NOT RECORDED |
 | Requests offered | NOT RECORDED |
 | Valid requests offered | NOT RECORDED |
 | Requests accepted | NOT RECORDED |
@@ -202,18 +210,89 @@ Complete this summary for each final benchmark run.
 | Requests failed | NOT RECORDED |
 | Invalid requests | NOT RECORDED |
 | Capacity-rejected requests | NOT RECORDED |
+| Ingestion duration (µs) | NOT RECORDED |
+| Drain duration (µs; zero if all accepted work has drained by end of ingestion) | NOT RECORDED |
+| Total run duration (µs; ingestion + drain) | NOT RECORDED |
+| Measurement duration (µs) | NOT RECORDED |
 | Completed throughput (requests/second) | NOT RECORDED |
-| Median ingress-to-terminal latency | NOT RECORDED |
-| 95th percentile latency | NOT RECORDED |
-| 99th percentile latency | NOT RECORDED |
-| Maximum observed latency | NOT RECORDED |
-| High queue peak occupancy | NOT RECORDED |
-| Medium queue peak occupancy | NOT RECORDED |
-| Low queue peak occupancy | NOT RECORDED |
-| Ingestor/consumer affinity mapping | NOT RECORDED |
-| CSV output path | NOT GENERATED |
+| QPC frequency (Hz) | NOT RECORDED |
 
-Latency percentiles may be calculated offline from the recorded per-job results. Offline analysis is not an additional hot-path instrumentation requirement.
+### 12.2 Per-queue counters and occupancy
+
+| Queue | Capacity | Valid requests offered | Accepted | Completed | Failed | Capacity rejected | Peak occupancy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| High | 262,144 | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+| Medium | 524,288 | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+| Low | 524,288 | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+
+Peak occupancy is recorded independently for each queue. Overall peak occupancy shall not be computed by summing queue peaks because their maxima may occur at different times.
+
+### 12.3 End-to-end latency distributions
+
+Latency means ingress-to-terminal-completion time, including queue waiting and handler processing. The primary successful-service percentile distribution includes only requests with `Status = Completed`. Failed-request counts remain visible separately.
+
+`Visualizer.py` calculates minimum, arithmetic mean, P50, P90, P95, P99 and maximum using the nearest-rank method. For `N` sorted samples and percentile fraction `p`, the selected one-based rank is `ceil(p × N)`. Empty groups are reported as unavailable, not zero.
+
+| Scope | Successful samples | Min (µs) | Mean (µs) | P50 (µs) | P90 (µs) | P95 (µs) | P99 (µs) | Max (µs) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Overall | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+| High | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+| Medium | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+| Low | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED | NOT RECORDED |
+
+### 12.4 Benchmark environment and generated files
+
+| Item | Result |
+|---|---|
+| CPU model | NOT RECORDED |
+| Physical/logical processor counts | NOT RECORDED |
+| Windows edition/build | NOT RECORDED |
+| Compiler version/target | NOT RECORDED |
+| Standard library/toolset | NOT RECORDED |
+| Build configuration | NOT RECORDED |
+| AVX2 mode | NOT RECORDED |
+| Processor-affinity mapping | NOT RECORDED |
+| Python version | NOT RECORDED |
+| Matplotlib version | NOT RECORDED |
+| `BenchmarkResults.csv` | NOT GENERATED |
+| `BenchmarkSummary.csv` | NOT GENERATED |
+| `Visualizer.py` execution | NOT RUN |
+| `Visualizations/LatencyPercentiles.csv` | NOT GENERATED |
+| `Visualizations/QueueLatencyPercentiles.png` | NOT GENERATED |
+| `Visualizations/LatencyDistribution.png` | NOT GENERATED |
+| `Visualizations/CompletionTimeline.png` | NOT GENERATED |
+| `Visualizations/QueueUtilizationAndAccounting.png` | NOT GENERATED |
+
+### 12.5 Required CSV schemas
+
+`BenchmarkResults.csv` shall contain:
+
+`RunID, JobID, PriorityClass, Severity, JobType, Urgency, Status, IngressElapsedMicroseconds, CompletionElapsedMicroseconds, LatencyMicroseconds`
+
+It contains one terminal record for every accepted request that reaches `Completed` or `Failed`. Invalid and capacity-rejected requests are represented in the summary, not as consumer terminal records.
+
+`BenchmarkSummary.csv` shall contain four records per run, with `QueueScope` equal to `Overall`, `High`, `Medium` and `Low`. Its required fields are:
+
+`RunID, RunStatus, QueueScope, QueueCapacity, RequestsOffered, ValidRequestsOffered, InvalidRequests, Accepted, Completed, Failed, CapacityRejected, PeakOccupancy, IngestionDurationMicroseconds, DrainDurationMicroseconds, TotalRunDurationMicroseconds, MeasurementDurationMicroseconds, CompletedThroughputRPS, QPCFrequencyHz, WorkloadProfile, SeverityDistribution, JobTypeDistribution, BuildConfiguration, AVX2Mode, CPUModel, PhysicalCoreCount, LogicalProcessorCount, WindowsBuild, CompilerVersion, CompilerTarget, StandardLibrary, AffinityMapping`
+
+For queue rows, offered counts are scoped to valid requests routed to that tier. `InvalidRequests` is meaningful only in the Overall row. `PeakOccupancy` is per queue and is blank for Overall. `CompletedThroughputRPS` is populated only for Overall.
+
+`Visualizations/LatencyPercentiles.csv` shall contain:
+
+`RunID, QueueScope, SampleCount, MinLatencyMicroseconds, MeanLatencyMicroseconds, P50Microseconds, P90Microseconds, P95Microseconds, P99Microseconds, MaxLatencyMicroseconds`
+
+It contains Overall, High, Medium and Low scopes. These values are derived offline and are not part of the C++ hot path.
+
+### 12.6 Visualization outputs and interpretation
+
+`Visualizer.py` reads the two C++-generated CSV files, checks run identity/schema/numeric values/accounting, and produces:
+
+- `Visualizations/QueueLatencyPercentiles.png` — P50/P90/P95/P99 comparison across High, Medium and Low.
+- `Visualizations/LatencyDistribution.png` — per-queue latency distributions, such as box plots or histograms.
+- `Visualizations/CompletionTimeline.png` — successful completions across elapsed-time windows. The bin width must be documented in the chart or its metadata.
+- `Visualizations/QueueUtilizationAndAccounting.png` — per-queue peak occupancy/utilization and request accounting.
+
+The completion timeline is a time-series visualization, not the authoritative completed-throughput calculation. The authoritative overall throughput is successful completions divided by total measurement duration for a fully drained run. Visualization is post-run only and shall not affect the benchmark timing.
 
 ---
 
@@ -237,6 +316,8 @@ Copy this record for each test campaign or benchmark scenario.
 | Workload seed and distribution | NOT RECORDED |
 | Measurement duration | NOT RECORDED |
 | Result file(s) | NOT RECORDED |
+| Python/Matplotlib versions | NOT RECORDED |
+| Visualizer output directory | NOT GENERATED |
 
 **Observed result:**  
 _To be completed after execution._
@@ -260,7 +341,7 @@ _Complete if the test fails or is blocked._
 |---|---|---|---|---|---|---|
 | — | — | — | No execution results recorded yet. | — | — | — |
 
-Any deviation from the Design & Specification Document shall be recorded here, including changes to request layout, queue capacity, ownership, memory ordering, processor affinity, timestamp representation, job semantics, source-file responsibilities or throughput accounting.
+Any deviation from the Design & Specification Document shall be recorded here, including changes to request layout, queue capacity, ownership, memory ordering, processor affinity, timestamp representation, job semantics, source-file responsibilities, CSV schemas, percentile methodology, visualization outputs or throughput accounting.
 
 ---
 
@@ -277,7 +358,9 @@ Any deviation from the Design & Specification Document shall be recorded here, i
 | Urgency metadata and FIFO semantics are correct | NOT RUN |
 | Processor affinity is verified | NOT RUN |
 | QPC latency conversion is verified | NOT RUN |
-| Diagnostics and CSV output are validated | NOT RUN |
+| Diagnostics and both benchmark CSV outputs are validated | NOT RUN |
+| Offline visualizer input validation and outputs are verified | NOT RUN |
+| Per-queue P50/P90/P95/P99 and Overall percentiles are verified | NOT RUN |
 | One-million-request volume run is completed | NOT RUN |
 | One-million requests/second target is measured and reported | NOT RUN |
 | AVX2/reference comparison is recorded | NOT RUN |
