@@ -1,8 +1,8 @@
-# WinTask — Design & Specification Document
+# WinTask: Design & Specification Document
 
 **Document type:** Combined Technical Requirements, High-Level Design and Low-Level Design  
 **Project:** WinTask — High-Performance Priority-Based Task Scheduler & Processor for Windows  
-**Document version:** 0.2 — Revised Proof-of-Concept baseline  
+**Document version:** 0.3 — Benchmark telemetry and offline visualization revision  
 **Status:** Approved architectural baseline; implementation pending  
 **Academic context:** Semester 5 — Operating Systems (Lab Project)  
 **Platform:** Windows x64  
@@ -39,6 +39,8 @@ The one-million-requests-per-second figure is a target to measure, not a guarant
 - Measure ingress-to-terminal-completion latency using the Windows high-resolution performance counter.
 - Exercise three representative synthetic job types: session validation, telemetry processing and signature/bit-transformation computation.
 - Collect per-consumer results without performing CSV formatting or file output in the measured processing path.
+- Export detailed per-request results and run/queue summaries to separate CSV files after the workload has drained.
+- Use an essential offline Python visualization tool to validate the exported data, calculate queue-specific latency distributions and generate benchmark charts.
 - Evaluate the effect of cache-line placement and AVX2-assisted slot transfer rather than assuming an optimization is beneficial.
 - Keep the engine and its queue mechanism sufficiently self-contained to support later investigation or extraction into other applications.
 
@@ -49,7 +51,7 @@ The following are outside the current proof of concept:
 - A global overflow queue or cross-priority capacity borrowing.
 - A Signal Tree or another alternative readiness-selection structure.
 - A dynamic worker pool, work stealing or arbitrary worker creation.
-- A GUI, dashboard, web interface or OS visualizer.
+- A live GUI, dashboard, web interface or OS visualizer. Offline post-run data visualization through `Visualizer.py` is included in the project scope.
 - Kernel modifications, drivers, kernel modules or filesystem minifilters.
 - A production HTTP listener or actual HTTP response transport. HTTP 429 is only a simulated overload/rejection classification.
 - Arbitrary executable launching or management of unrelated Windows processes.
@@ -83,6 +85,12 @@ The three job handlers provide controlled synthetic processing. They are not sec
 | Capacity rejection | A valid request rejected because its selected queue is full. |
 | Aggregate capacity | Sum of the capacities of all three queues. It is not a shared pool. |
 | End-to-end latency | Elapsed time from ingress timestamp capture to the request's terminal completion/failure point. |
+| QPC | Windows QueryPerformanceCounter high-resolution monotonic counter used for ingress and terminal timestamps. |
+| BenchmarkResults.csv | Per-request output containing one terminal record for each accepted request. |
+| BenchmarkSummary.csv | Run-level and priority-queue-level counters, capacity, timing and environment metadata. |
+| Visualizer.py | Offline Python analysis and visualization utility that consumes the two benchmark CSV files. |
+| LatencyPercentiles.csv | Derived visualization output containing latency-distribution statistics for Overall, High, Medium and Low scopes. |
+| Nearest-rank percentile | Percentile method defined by sorting the samples and selecting the one-based rank `ceil(p × N)`. |
 
 ---
 
@@ -108,6 +116,12 @@ The three job handlers provide controlled synthetic processing. They are not sec
 | FR-14 | The benchmark shall calculate successfully completed request throughput and ingress-to-terminal-completion latency. |
 | FR-15 | Normal shutdown shall stop further ingestion, drain accepted work, terminate consumers and join all worker threads before final result export. |
 | FR-16 | The command-line interface shall provide separate validation, benchmark, full-evaluation and exit choices. |
+| FR-17 | After a completed benchmark run has drained and all consumers have terminated, the benchmark shall export `BenchmarkResults.csv` and `BenchmarkSummary.csv`. |
+| FR-18 | `BenchmarkResults.csv` shall contain one terminal record for every accepted request, including its run ID, identity, priority/job metadata, terminal status, ingress elapsed time, completion elapsed time and end-to-end latency. |
+| FR-19 | `BenchmarkSummary.csv` shall contain one Overall row and one row for each of High, Medium and Low, with scope-appropriate counters, queue capacity/occupancy and run metadata. |
+| FR-20 | `Visualizer.py` shall read and validate the two benchmark CSV files after the C++ benchmark has completed; it shall not participate in request processing. |
+| FR-21 | The visualizer shall calculate P50, P90, P95 and P99 end-to-end latency separately for High, Medium and Low, and shall also provide an Overall distribution for context. |
+| FR-22 | The visualizer shall export `LatencyPercentiles.csv` and generate the specified PNG charts in a `Visualizations` output directory. |
 
 ### 3.2 Non-functional requirements
 
@@ -126,6 +140,11 @@ The three job handlers provide controlled synthetic processing. They are not sec
 | NFR-11 | Benchmark output shall distinguish offered, accepted, completed, failed, invalid and capacity-rejected requests. |
 | NFR-12 | The selected Clang/MSVC STL toolchain shall be the project's build and validation target. GCC is not part of this project's primary toolchain matrix. |
 | NFR-13 | Queue and engine storage shall be initialized before the measured interval. No queue backing-store allocation shall occur per request. |
+| NFR-14 | The C++ hot path shall not perform Python execution, chart generation, CSV formatting or synchronous CSV file output. |
+| NFR-15 | `Visualizer.py` shall operate offline after the C++ run and shall not alter the benchmark CSV inputs. |
+| NFR-16 | The visualizer shall validate run identity, required columns, numeric fields and accounting consistency before presenting results. |
+| NFR-17 | Latency percentiles shall be calculated using the documented nearest-rank method and successful (`Completed`) request samples. Empty sample groups shall be reported as unavailable, not as zero. |
+| NFR-18 | The visualizer shall produce queue-specific latency percentiles for High, Medium and Low, plus an Overall row, and retain the derived numeric results in `LatencyPercentiles.csv`. |
 
 ### 3.3 Performance objectives and interpretation
 
@@ -382,7 +401,7 @@ Urgency is retained as an 8-bit field and included in diagnostics. It does not r
 
 ### 9.1 Ingress timestamp and latency
 
-The descriptor stores the 64-bit raw QPC value captured by the ingestor. QPC frequency is obtained once during initialization and reused for conversions during the run.
+The descriptor stores the 64-bit raw QPC value captured by the ingestor. A run-start QPC reference is captured immediately before the first offered request. Per-request ingress and terminal elapsed times are converted relative to that same reference. QPC frequency is obtained once during initialization and reused for conversions during the run.
 
 For a request with ingress counter value `QPC_in` and terminal counter value `QPC_out`:
 
@@ -394,54 +413,208 @@ The reported quantity is **ingress-to-terminal-completion/failure latency**. It 
 
 ### 9.2 Per-consumer diagnostics storage
 
-Each consumer writes result records into its own preallocated diagnostics array. The arrays are prepared before the measured run and are not shared for concurrent append operations.
+Each consumer writes terminal result records into its own preallocated diagnostics array. The arrays are prepared before the measured run and are not shared for concurrent append operations.
 
-The minimum per-job result fields are:
+Each accepted request that reaches a terminal state shall produce exactly one per-request diagnostics record. The minimum retained information is:
 
-- Job ID;
+- Run ID;
+- job ID;
 - priority class;
+- original severity;
+- job type;
 - urgency;
-- ingress-to-terminal-completion latency in microseconds;
-- terminal status.
+- terminal status;
+- ingress elapsed time relative to the benchmark start;
+- terminal/completion elapsed time relative to the benchmark start;
+- ingress-to-terminal latency.
 
-The diagnostics design shall avoid dynamic allocation and CSV formatting in the steady-state consumer path. Capacity shall be sufficient for the configured benchmark workload or the run shall be marked invalid if result storage cannot represent every required terminal record.
+Diagnostics storage shall avoid dynamic allocation and CSV formatting in the steady-state consumer path. Its capacity shall be sufficient for every terminal result in the configured benchmark workload. If a record cannot be retained, the run shall be marked invalid/incomplete rather than silently omitting a result.
+
+The terminal QPC timestamp shall be captured immediately after the handler reaches its successful or failed terminal outcome, before diagnostics copying and queue-slot reclamation. This keeps the end-to-end measurement boundary consistent and excludes result-export overhead.
 
 ### 9.3 Aggregate counters
 
-WinTask shall track at least:
+WinTask shall maintain overall and per-priority counters for the quantities that have a meaningful queue scope:
 
-- total requests offered;
-- valid requests offered;
+- requests offered;
+- valid requests offered/routed;
 - accepted requests;
 - successfully completed requests;
 - failed requests;
-- invalid requests;
-- capacity-rejected requests.
+- capacity-rejected requests;
+- peak queue occupancy.
 
-After all accepted work has reached a terminal state and the queues have drained, the following accounting identities shall hold:
+Invalid requests are tracked at the Overall scope because they cannot be assigned to a valid priority queue. Per-queue counters shall not include invalid requests.
 
-- valid requests offered = accepted requests + capacity-rejected requests;
-- accepted requests = successfully completed requests + failed requests.
+After all accepted work has reached a terminal state and the queues have drained, these identities shall hold:
 
-Invalid requests are counted separately and are not included in the valid-offer identity.
+- Overall valid requests offered = accepted requests + capacity-rejected requests.
+- Overall accepted requests = successfully completed requests + failed requests.
+- For each priority queue, valid requests routed to that queue = accepted requests for that queue + capacity rejections for that queue.
+- The sum of High, Medium and Low accepted/completed/failed/capacity-rejected counts shall equal the corresponding Overall counts.
 
-### 9.4 CSV output
+Invalid requests are accounted for separately and are not included in the valid-offer identity.
 
-The benchmark exports `TestResults.csv` after ingestion is stopped, all accepted work is drained, all consumers have terminated and diagnostics arrays are stable.
+### 9.4 C++ benchmark CSV outputs
 
-Minimum per-job columns:
+The benchmark shall export two input files for offline analysis. Both files shall use the same `RunID` for a given run.
 
-`JobID, PriorityClass, Urgency, LatencyMicroseconds, Status`
+#### 9.4.1 `BenchmarkResults.csv` — per-request records
 
-The final output may include a separate aggregate summary or summary section/file if needed, but the per-job record schema remains stable for the user's offline Python analysis workflow. CSV generation is outside the measured hot path.
+This file contains one row for every accepted request that reaches a terminal state (`Completed` or `Failed`). Invalid and capacity-rejected requests do not have consumer terminal records and are represented by aggregate counters in `BenchmarkSummary.csv`.
 
-### 9.5 Completed throughput
+The required columns are:
+
+| Column | Meaning |
+|---|---|
+| `RunID` | Identifier shared by all records belonging to one benchmark run. |
+| `JobID` | Request identifier, unique within the run. |
+| `PriorityClass` | `High`, `Medium` or `Low`. |
+| `Severity` | Original severity value (1–5). |
+| `JobType` | `VALIDATE_SESSION`, `TELEMETRY_LOG` or `COMPUTE_SIGN`. |
+| `Urgency` | Original urgency value; retained for analysis but does not reorder FIFO processing. |
+| `Status` | Terminal status: `Completed` or `Failed`. |
+| `IngressElapsedMicroseconds` | Ingress QPC elapsed time relative to the benchmark's first-ingress/run-start reference. |
+| `CompletionElapsedMicroseconds` | Terminal QPC elapsed time relative to the same reference. |
+| `LatencyMicroseconds` | Ingress-to-terminal elapsed time, calculated from QPC ticks using the cached QPC frequency. |
+
+Elapsed-time and latency values shall retain fractional-microsecond precision in the CSV. The raw QPC tick values need not be exported, provided the converted values are calculated from the original 64-bit counter samples and the run's recorded QPC frequency.
+
+The primary successful-service latency analysis uses records whose `Status` is `Completed`. Failed-request counts are reported separately in the summary; failure latency must not be mixed into successful-completion percentiles in a way that makes early failures appear to improve service latency.
+
+#### 9.4.2 `BenchmarkSummary.csv` — run and queue summaries
+
+This file shall contain four rows for each run: `Overall`, `High`, `Medium` and `Low`. All four rows shall carry the same `RunID` and run-level environment metadata.
+
+The required columns are:
+
+| Column | Meaning |
+|---|---|
+| `RunID` | Identifier shared with `BenchmarkResults.csv`. |
+| `RunStatus` | `Complete`, `Incomplete` or `Invalid`. |
+| `QueueScope` | `Overall`, `High`, `Medium` or `Low`. |
+| `QueueCapacity` | Capacity of the selected queue; for Overall, the sum of all three capacities. |
+| `RequestsOffered` | All requests presented to ingestion for Overall; valid requests routed to the tier for a queue row. |
+| `ValidRequestsOffered` | Valid requests offered overall or routed to the selected queue. |
+| `InvalidRequests` | Invalid requests at Overall scope; zero for individual queue rows. |
+| `Accepted` | Requests successfully published to the relevant queue, or the aggregate across queues. |
+| `Completed` | Requests whose handlers completed successfully. |
+| `Failed` | Accepted requests that reached a failure terminal state. |
+| `CapacityRejected` | Valid requests rejected because the selected queue was full. |
+| `PeakOccupancy` | Maximum observed occupancy for the selected queue; blank for Overall rather than summing non-simultaneous queue peaks. |
+| `IngestionDurationMicroseconds` | Time from the first offered request to the last offered request. |
+| `DrainDurationMicroseconds` | Time after ingestion ends until all accepted requests reach terminal states; zero if all accepted work has already drained by the end of ingestion. |
+| `TotalRunDurationMicroseconds` | Time from the first offered request until the later of the last offer or the final accepted request's terminal outcome. |
+| `MeasurementDurationMicroseconds` | Duration used as the denominator for Overall completed throughput; equal to total run duration for a fully drained run. |
+| `CompletedThroughputRPS` | Overall successful completions divided by the declared measurement duration; populated only for the Overall row. |
+| `QPCFrequencyHz` | Cached QueryPerformanceCounter frequency used for conversions. |
+| `WorkloadProfile` | Human-readable or stable identifier for the workload configuration. |
+| `SeverityDistribution` | Declared severity/priority input distribution. |
+| `JobTypeDistribution` | Declared mix of the three job types. |
+| `BuildConfiguration` | Build mode used for the run, such as Release. |
+| `AVX2Mode` | Indicates whether the AVX2-assisted or reference transfer path was used. |
+| `CPUModel` | Processor model used for the run. |
+| `PhysicalCoreCount` | Physical core count reported for the target environment. |
+| `LogicalProcessorCount` | Logical processor count reported for the target environment. |
+| `WindowsBuild` | Windows edition/build information. |
+| `CompilerVersion` | Actual compiler version used. |
+| `CompilerTarget` | Compiler target triple. |
+| `StandardLibrary` | Standard library/toolset identity. |
+| `AffinityMapping` | Ingestor and consumer processor assignments used by the run. |
+
+For queue rows, `RequestsOffered` and `ValidRequestsOffered` refer to valid requests classified for that tier. `InvalidRequests` is only meaningful at Overall scope. Per-queue `CompletedThroughputRPS` shall remain blank: the project's primary throughput metric is aggregate completed requests per second, not a separate per-queue throughput target.
+
+For a complete run, the accounting identities in Section 9.3 shall reconcile. For an incomplete or invalid run, the status must be explicit; the visualizer must not present it as a valid completed benchmark.
+
+#### 9.4.3 Export timing and file handling
+
+For a normal completed run, both files shall be generated only after ingestion has stopped, accepted work has drained, all consumer threads have terminated and diagnostics arrays are stable. CSV formatting and file I/O are outside the measured request-processing path.
+
+If a benchmark ends through a controlled incomplete/invalid run path and diagnostics can be safely stabilized after all threads have stopped, partial artifacts may be exported with the corresponding `RunStatus`; they are diagnostic records only and shall not be presented as a completed benchmark. An uncontrolled process termination may produce no output files.
+
+The per-request result file and run summary must use matching run identifiers. A mismatch, missing required column, inconsistent count or missing terminal record makes the run invalid for final visualization.
+
+### 9.5 Completed throughput and run phases
 
 Completed throughput is calculated as:
 
 **Successfully completed requests ÷ measurement duration in seconds.**
 
-The report shall show offered, accepted, completed, failed and rejected counts alongside the throughput result. A run that has not drained all accepted requests is incomplete and shall not be presented as a final completed-throughput result.
+The benchmark shall distinguish three timing intervals:
+
+| Interval | Definition |
+|---|---|
+| Ingestion duration | From the first offered request until the last request has been offered. |
+| Drain duration | From the end of ingestion until every accepted request has reached a terminal state; zero if all accepted work has already drained by the end of ingestion. |
+| Total run duration | From the first offered request until the later of the last offer or the final accepted request's terminal outcome. |
+
+For a fully drained benchmark, total run duration equals ingestion duration plus drain duration and is the denominator for the primary completed-throughput calculation. The benchmark must not report a final completed-throughput result when accepted requests remain unfinished. A run with a zero or invalid measurement duration shall not produce a numeric throughput value.
+
+Offered rate, accepted rate and completed throughput are different measurements. Only successful terminal completions contribute to completed throughput.
+
+### 9.6 Latency distributions and percentile methodology
+
+The primary latency measure is ingress-to-terminal-completion latency, including time spent waiting in the assigned queue and time spent in the consumer's processing stages.
+
+`Visualizer.py` shall calculate the following statistics separately for High, Medium and Low, and additionally for Overall:
+
+- sample count;
+- minimum latency;
+- arithmetic mean latency;
+- P50;
+- P90;
+- P95;
+- P99;
+- maximum latency.
+
+The minimum, mean, P50/P90/P95/P99 and maximum statistics in the primary latency summary shall use successful requests only (`Status = Completed`). Failed requests remain represented in the per-request data and aggregate failure counts, but they are not mixed into successful-service latency statistics. An empty successful sample group shall produce an unavailable/blank percentile result, not zero.
+
+The percentile definition is **nearest rank**. For `N` valid samples sorted in ascending order and percentile fraction `p`, select the one-based sample at rank `ceil(p × N)`. The same method shall be applied consistently to all four scopes. The visualizer shall record the sample count used for each row.
+
+The derived `LatencyPercentiles.csv` shall contain one row per scope and at least these columns:
+
+`RunID, QueueScope, SampleCount, MinLatencyMicroseconds, MeanLatencyMicroseconds, P50Microseconds, P90Microseconds, P95Microseconds, P99Microseconds, MaxLatencyMicroseconds`
+
+The raw per-request CSV remains the source of truth; percentile values are derived offline and do not need to be calculated inside the C++ hot path.
+
+### 9.7 Offline visualization — `Visualizer.py`
+
+`Visualizer.py` is an essential project deliverable for post-run analysis. It is a separate Python utility and is not part of `WinTask.exe`, the request-processing engine or the measured benchmark path.
+
+Inputs:
+- `BenchmarkResults.csv`;
+- `BenchmarkSummary.csv`.
+
+Responsibilities:
+1. Read both CSV files and verify that their `RunID` values match.
+2. Validate required columns, parse numeric fields, check row counts and reconcile per-request records with summary counters.
+3. Reject or clearly mark incomplete/invalid runs rather than displaying them as successful completed benchmarks.
+4. Group successful terminal latency samples by Overall, High, Medium and Low.
+5. Calculate the documented latency statistics and nearest-rank P50/P90/P95/P99 percentiles.
+6. Generate benchmark visualizations and save the derived percentile table.
+
+Required visualizations:
+- **Queue latency percentile comparison:** P50, P90, P95 and P99 for High, Medium and Low.
+- **Latency distribution comparison:** a distribution-oriented chart such as box plots or histograms for the three priority tiers, with outliers visible where practical.
+- **Completion timeline:** successful completions over elapsed run time, grouped into documented fixed time windows. This chart is a time-series view of completions, not a substitute for the overall completed-throughput calculation.
+- **Queue occupancy and request accounting:** queue peak occupancy/utilization alongside offered/routed, accepted, completed, failed and capacity-rejected counts.
+
+Outputs:
+- `Visualizations/LatencyPercentiles.csv`;
+- `Visualizations/QueueLatencyPercentiles.png`;
+- `Visualizations/LatencyDistribution.png`;
+- `Visualizations/CompletionTimeline.png`;
+- `Visualizations/QueueUtilizationAndAccounting.png`.
+
+The visualization script shall use the two C++-generated CSV files as inputs and shall not modify them. Standard Python CSV/numeric facilities may be used for parsing and percentile calculations; Matplotlib is the plotting dependency. The exact Python and Matplotlib versions shall be recorded in the test environment when validation is performed.
+
+The user shall execute `Visualizer.py` manually after a benchmark run. The existing four-option C++ CLI remains unchanged; Python visualization is a separate offline step. The script may use a configurable completion-timeline bin width, but the selected interval must be shown in the chart or its metadata.
+
+### 9.8 Diagnostic and visualization boundaries
+
+The C++ engine and consumers are responsible only for capturing timestamps, terminal records, counters and queue occupancy statistics into preallocated storage. The benchmark is responsible for post-run CSV export. `Visualizer.py` is responsible for validation, percentile calculation and chart generation.
+
+No percentile sorting, Python execution, charting, or CSV formatting shall occur in the measured request-processing path.
 
 ---
 
@@ -469,16 +642,17 @@ AVX2 is 256 bits wide, matching the size of one 32-byte slot. Two complete slots
 
 ## 11. Source-file and module organization
 
-The project uses the following six-file source layout. The structure is intentionally compact: logical responsibilities are grouped where their implementations are small, while the engine and evaluation components remain clearly separated.
+The project uses the following six C++ source files plus one essential offline Python visualization script. The structure is intentionally compact: logical responsibilities are grouped where their implementations are small, while the engine and evaluation components remain clearly separated.
 
 | File | Responsibility |
 |---|---|
 | `WinTask.cpp` | The sole application entry point. Initializes the command-line interface and returns its exit status. It contains no separate engine, validator or benchmark implementation. |
 | `SystemInterface.hpp` | Provides the command-line menu and dispatches the user's selection to validation, benchmarking, full evaluation or exit. It imports the validator and benchmark interfaces. |
 | `WinTaskValidator.hpp` | Contains the 40 documented test cases, their grouped execution flow, pass/fail accounting and validation summary. It exercises the same engine used by the benchmark. |
-| `WinTaskBenchmark.hpp` | Owns workload generation and benchmark orchestration, uses the engine, applies the configured affinity plan, collects measurements and exports `TestResults.csv`. |
+| `WinTaskBenchmark.hpp` | Owns workload generation and benchmark orchestration, uses the engine, applies the configured affinity plan, collects measurements and exports `BenchmarkResults.csv` and `BenchmarkSummary.csv`. |
 | `WinTaskUtilities.hpp` | Groups small shared platform/utilities that do not justify separate files, including QPC timing support, configured thread-affinity support and narrowly scoped common helpers. It does not own the request model or scheduler. |
 | `WinTaskEngine.hpp` | The core execution engine: configuration, job/state types, descriptor/payload/slot model, internal SPSC queue implementation, priority queues, ingestion/routing, consumer loops, synthetic job handlers, aggregate counters, per-consumer diagnostics storage and engine lifecycle. It uses the shared utilities. |
+| `Visualizer.py` | Essential offline Python analysis utility. Reads `BenchmarkResults.csv` and `BenchmarkSummary.csv`, validates the run data, calculates Overall and per-queue latency distributions including P50/P90/P95/P99, and generates CSV/PNG visualization outputs. It is run manually after the C++ benchmark and is not part of the measured hot path. |
 
 ### 11.1 Conceptual dependency arrangement
 
@@ -489,6 +663,7 @@ The intended dependency direction is:
 - `WinTaskValidator.hpp` and `WinTaskBenchmark.hpp` both depend on `WinTaskEngine.hpp`.
 - `WinTaskEngine.hpp` depends on `WinTaskUtilities.hpp` for shared platform support.
 - `WinTaskUtilities.hpp` does not depend on the engine, validator, benchmark or interface.
+- `Visualizer.py` is independent of the C++ include graph. It consumes the two exported CSV files after the benchmark completes.
 
 The engine does not import or depend on the CLI, validator or benchmark. The validator and benchmark use the same engine implementation rather than maintaining separate runtime implementations.
 
@@ -508,9 +683,15 @@ The menu coordinates these operations; it does not contain queue, scheduling or 
 ### 11.3 Build outputs
 
 - `WinTask.exe` — the single application containing the CLI, validator, benchmark and engine.
-- `TestResults.csv` — generated benchmark output after a completed run.
+- `BenchmarkResults.csv` — per-request terminal records generated after a completed benchmark run.
+- `BenchmarkSummary.csv` — Overall and High/Medium/Low run summaries and environment metadata.
+- `Visualizations/LatencyPercentiles.csv` — derived Overall and per-queue latency statistics.
+- `Visualizations/QueueLatencyPercentiles.png`
+- `Visualizations/LatencyDistribution.png`
+- `Visualizations/CompletionTimeline.png`
+- `Visualizations/QueueUtilizationAndAccounting.png`
 
-The validator's test summary may be displayed in the console. No separate validator or benchmark executable is required for this POC.
+The validator's test summary may be displayed in the console. No separate validator or benchmark executable is required for this POC. `Visualizer.py` is executed separately after the C++ benchmark has generated its two CSV inputs.
 
 ---
 
@@ -524,6 +705,7 @@ The validator's test summary may be displayed in the console. No separate valida
 - Platform timing: Windows performance-counter facilities.
 - Processor affinity: project-selected mapping of ingestor to 0 and High/Medium/Low consumers to 2/4/6, as recorded for the target machine.
 - GCC 16.1 is not part of this project's primary build/validation matrix.
+- Offline visualization: Python 3 and Matplotlib. Exact installed versions shall be recorded during validation; no unverified version pin is specified here.
 - Benchmark measurements shall use an optimized Release build. Correctness validation may additionally be performed in an instrumented or Debug build; timings from different build modes shall not be compared as equivalent.
 
 The final run record shall capture the compiler version, target, STL/toolset, Windows build, CPU, build configuration, affinity mapping, workload distribution and measurement duration.
@@ -544,6 +726,9 @@ The final run record shall capture the compiler version, target, STL/toolset, Wi
 10. The original 300–700 ns processing estimate is provisional until measured.
 11. The additional 310,720 slots are distributed headroom, not capacity that can be dynamically reassigned between queues.
 12. Optional cache-line ownership experiments are not required for acceptance of the baseline POC.
+13. `Visualizer.py` is an offline post-processing utility. It does not run concurrently with ingestion or consumers and cannot affect measured throughput/latency.
+14. Successful-service percentiles exclude failed requests; failed requests remain visible in per-request records and aggregate failure counts.
+15. The completion timeline uses time-windowed completion counts/rates and is not itself the authoritative completed-throughput calculation.
 
 ---
 
@@ -567,7 +752,14 @@ The POC is ready for its final demonstration when:
 - [ ] Both the scalar/reference and AVX2 request-copy paths, if enabled, preserve identical request data.
 - [ ] The CLI's validation, benchmark, full-evaluation and exit choices behave as specified.
 - [ ] `WinTask.exe` builds with the selected Clang/MSVC STL toolchain.
-- [ ] The benchmark exports a valid `TestResults.csv` after all consumers terminate.
+- [ ] The benchmark exports `BenchmarkResults.csv` with one terminal record for every accepted request.
+- [ ] The benchmark exports `BenchmarkSummary.csv` with Overall, High, Medium and Low records and reconciled counters.
+- [ ] The two benchmark CSV files carry matching run identifiers and pass schema/numeric/accounting validation.
+- [ ] `Visualizer.py` reads both CSV files without modifying them and rejects or marks incomplete/invalid runs.
+- [ ] `Visualizer.py` calculates Overall and High/Medium/Low latency sample counts, minimum, mean, P50, P90, P95, P99 and maximum using the documented nearest-rank method over successful requests.
+- [ ] Empty successful-latency groups are represented as unavailable rather than zero.
+- [ ] `Visualizer.py` exports `Visualizations/LatencyPercentiles.csv` and all four required PNG charts.
+- [ ] The C++ benchmark and worker hot paths perform no Python execution, charting or CSV formatting/file I/O.
 - [ ] Performance results state the workload and do not confuse offered rate with completed throughput.
 
 ---
@@ -588,11 +780,13 @@ The following platform and language references support the implementation decisi
 This revision establishes the following baseline:
 
 - WinTask is a **High-Performance Priority-Based Task Scheduler & Processor for Windows**.
-- The six-file layout is `WinTask.cpp`, `SystemInterface.hpp`, `WinTaskValidator.hpp`, `WinTaskBenchmark.hpp`, `WinTaskUtilities.hpp` and `WinTaskEngine.hpp`.
+- The six C++ source files are `WinTask.cpp`, `SystemInterface.hpp`, `WinTaskValidator.hpp`, `WinTaskBenchmark.hpp`, `WinTaskUtilities.hpp` and `WinTaskEngine.hpp`; `Visualizer.py` is the essential seventh project file for offline analysis.
 - `WinTaskEngine.hpp` owns the core engine and internal SPSC implementation.
 - `SystemInterface.hpp` is the CLI entry to validation, benchmarking, full evaluation and exit.
 - The validator and benchmark use the same engine implementation.
-- The 40-case validation baseline is defined in the companion Test Case Specification & Execution Record.
+- The 40-case validation baseline is defined in the companion Test Case Specification & Execution Record; TC-035 includes dual-CSV and offline-visualizer validation without increasing the test count.
+- `BenchmarkResults.csv` contains per-request terminal records; `BenchmarkSummary.csv` contains Overall and per-queue summaries; `Visualizer.py` derives `Visualizations/LatencyPercentiles.csv` and the required charts.
+- Latency P50/P90/P95/P99 are calculated offline for High, Medium and Low, with an additional Overall distribution, using successful terminal records and nearest-rank percentiles.
 - The request slot remains 32 bytes; its 64-bit descriptor timestamp is the ingress QPC value.
 - The payload's 32-bit middle field is request-specific metadata, not a second timestamp or a policy identifier.
 - Urgency remains diagnostic metadata; FIFO order is retained inside each priority queue.
