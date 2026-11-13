@@ -17,6 +17,8 @@ WinTask is a Windows-native C++ proof-of-concept that explores high-throughput r
 - Measure ingress-to-terminal-completion latency and successfully completed request throughput.
 - Evaluate cache placement, CPU affinity and AVX2-assisted request-slot transfer on the target machine.
 - Provide separate validation and benchmarking workflows through a command-line interface.
+- Export per-request results and run/queue summaries to separate CSV files.
+- Use `Visualizer.py` for offline validation, queue-specific latency percentile analysis and benchmark chart generation.
 
 ## Key Features
 
@@ -73,7 +75,7 @@ The proof of concept includes three controlled job types:
 - `TELEMETRY_LOG` — bounded synthetic telemetry-processing work.
 - `COMPUTE_SIGN` — deterministic bit-mixing and rotation work over a 64-bit input.
 
-These handlers provide representative processing workloads. The signature transformation is not cryptographic verification and does not provide security or authentication. Ingress timestamps are captured using the Windows high-resolution performance counter. Per-consumer diagnostics storage is preallocated and isolated by consumer. After accepted work has drained and consumers have terminated, benchmark results are exported to `BenchmarkResults.csv` for offline analysis. Completed throughput is calculated from successfully completed requests divided by the measurement interval. Offered, accepted, completed, failed and capacity-rejected requests are distinguished in the reported results.
+These handlers provide representative processing workloads. The signature transformation is not cryptographic verification and does not provide security or authentication. Ingress timestamps are captured using the Windows high-resolution performance counter. Per-consumer diagnostics storage is preallocated and isolated by consumer. After accepted work has drained and consumers have terminated, the benchmark exports `BenchmarkResults.csv` (per-request terminal records) and `BenchmarkSummary.csv` (Overall and per-queue counters, occupancy, timing and environment metadata). The offline `Visualizer.py` utility consumes both files, validates their run identity and accounting, calculates latency statistics including P50/P90/P95/P99 independently for High, Medium and Low, and generates the visualization outputs. Completed throughput is calculated from successfully completed requests divided by the measurement interval. Offered, accepted, completed, failed, invalid and capacity-rejected requests are distinguished in the reported results.
 
 ## Architecture
 
@@ -84,13 +86,14 @@ At a conceptual level, WinTask follows this processing flow:
 3. The request is published to the corresponding bounded SPSC queue.
 4. The dedicated consumer for that tier observes and processes requests in FIFO order.
 5. The consumer records the terminal status and its preallocated diagnostic result before releasing the queue slot.
-6. After ingestion stops and accepted work drains, the benchmark collects the results and exports `TestResults.csv`.
+6. After ingestion stops and accepted work drains, the benchmark collects the results and exports `BenchmarkResults.csv` and `BenchmarkSummary.csv`.
+7. The user runs `Visualizer.py` manually to validate the CSV inputs, derive `LatencyPercentiles.csv` and generate the benchmark charts.
 
 The project is an **application-level task scheduler and processor**, not a replacement for the Windows kernel scheduler. It simulates server-style request processing in-process; it does not implement a production HTTP server, external network ingress or management of arbitrary Windows processes. Any HTTP 429 terminology refers only to a simulated capacity-rejection event, not an actual HTTP response.
 
 ## Project Structure
 
-The planned source layout contains six files:
+The planned project layout contains six C++ source files and one essential offline Python visualization script:
 
 | File | Responsibility |
 |---|---|
@@ -100,6 +103,7 @@ The planned source layout contains six files:
 | `WinTaskBenchmark.hpp` | Workload generation, benchmark orchestration, processor-affinity configuration, measurement collection and CSV export. Exposes `RunBenchmarkSuite()` as the benchmark entry point. |
 | `WinTaskUtilities.hpp` | Small shared C++ and Windows utilities, such as high-resolution timing and narrowly scoped processor-affinity helpers. |
 | `WinTaskEngine.hpp` | Core runtime. Contains the `WinTaskEngine` class and the request model, configuration, internal SPSC queue implementation, priority routing, ingestion, consumers, synthetic job handlers, synchronization, diagnostics and lifecycle responsibilities. |
+| `Visualizer.py` | Essential offline Python utility. Reads `BenchmarkResults.csv` and `BenchmarkSummary.csv`, validates the data, calculates Overall and per-queue latency statistics including P50/P90/P95/P99, and generates CSV/PNG outputs. It runs manually after the C++ benchmark. |
 
 The intended dependency direction is:
 
@@ -107,7 +111,7 @@ The intended dependency direction is:
 - `SystemInterface.hpp` imports the validator and benchmark interfaces.
 - `WinTaskValidator.hpp` and `WinTaskBenchmark.hpp` both use the same `WinTaskEngine` implementation.
 - `WinTaskEngine.hpp` uses the shared utilities it requires.
-- The engine does not depend on the CLI, validator or benchmark.
+- The engine does not depend on the CLI, validator or benchmark. `Visualizer.py` is outside the C++ include graph and operates only on completed benchmark CSV outputs.
 
 This is an initial conceptual overview of the planned organization and interaction of the files. It describes responsibilities and dependencies, not implementation code or a commitment to a particular internal class hierarchy. Related small types and operations may remain grouped in their assigned files.
 
@@ -115,10 +119,10 @@ This is an initial conceptual overview of the planned organization and interacti
 
 The command-line interface is planned to provide four options:
 
-1. **Run Validator** — execute the 40 documented test cases and display the validation summary.
-2. **Run Benchmark** — execute the configured workload and export benchmark results.
-3. **Run Full Evaluation** — run validation first and start the benchmark only if validation succeeds.
-4. **Exit** — terminate the application cleanly.
+1. **Run Validator**: Executes the 40 documented test cases and displays the validation summary.
+2. **Run Benchmark**: Executes the configured workload and exports benchmark results.
+3. **Run Full Evaluation**: Runs validation first and starts the benchmark only if validation succeeds.
+4. **Exit**: Terminates the application cleanly.
 
 The interface coordinates the selected operation; request ingestion, queue management and task processing remain responsibilities of the engine.
 
@@ -127,6 +131,7 @@ The interface coordinates the selected operation; request ingestion, queue manag
 - Windows x64.
 - A processor and operating-system configuration compatible with the project's AVX2 benchmark path.
 - Sufficient available memory for the 40 MiB queue storage and additional runtime/diagnostics allocations.
+- Python 3 and Matplotlib for offline execution of `Visualizer.py`.
 - A CPU topology that supports the configured thread-affinity arrangement on the project machine.
 
 The target machine's processor model, logical-processor mapping, Windows build and available memory should be recorded with benchmark results.
@@ -139,7 +144,7 @@ The planned primary toolchain is:
 - **Target:** `x86_64-pc-windows-msvc`.
 - **Standard library:** Microsoft STL.
 - **Build environment:** Microsoft Build Tools for Visual Studio 2026.
-- **Language baseline:** C++26.
+- **Language baseline:** C++20; C++23 features may be used where explicitly supported and beneficial.
 - **SIMD target:** AVX2 for the request-slot transfer experiment on the project machine.
 
 GCC 16.1 is not part of WinTask's primary compiler configuration. Exact build commands and compiler options will be documented with the finalized build configuration; they should not be inferred from this conceptual project overview.
@@ -150,7 +155,28 @@ WinTask is planned as a single application with `WinTask.cpp` as its sole transl
 
 ## Running WinTask
 
-After a successful build, launch `WinTask.exe` and select one of the four CLI options. The benchmark option generates `TestResults.csv` after the workload has completed, accepted requests have drained and all consumer threads have terminated.
+After a successful build, launch `WinTask.exe` and select one of the four CLI options. The benchmark option generates `BenchmarkResults.csv` and `BenchmarkSummary.csv` after the workload has completed, accepted requests have drained and all consumer threads have terminated.
+
+After the C++ benchmark finishes, run `Visualizer.py` manually from the location where the two input CSV files are available. The script validates both inputs, computes latency distributions and writes its derived CSV and PNG charts into the `Visualizations` directory. Visualization is an offline step and is not included in benchmark timing.
+
+## Visualization
+
+`Visualizer.py` is an essential project component for offline benchmark analysis. It consumes:
+
+- `BenchmarkResults.csv` — one terminal result record for each accepted request.
+- `BenchmarkSummary.csv` — four scope rows (`Overall`, `High`, `Medium`, `Low`) containing request accounting, queue capacity/peak occupancy, run durations and environment metadata.
+
+The script validates matching run IDs, required columns, numeric values, record counts and request-accounting consistency before producing charts. It calculates minimum, mean, P50, P90, P95, P99 and maximum end-to-end latency for successful (`Completed`) requests, separately for High, Medium and Low, plus an Overall distribution. Percentiles use the nearest-rank method. A scope with no successful samples is reported as unavailable, not as zero.
+
+The derived file and charts are written to `Visualizations/`:
+
+- `LatencyPercentiles.csv` — one row each for Overall, High, Medium and Low, with sample count, minimum, mean, P50, P90, P95, P99 and maximum latency in microseconds.
+- `QueueLatencyPercentiles.png` — P50/P90/P95/P99 comparison by priority queue.
+- `LatencyDistribution.png` — latency distribution comparison, with outliers where practical.
+- `CompletionTimeline.png` — successful completion counts/rates over elapsed time windows.
+- `QueueUtilizationAndAccounting.png` — peak queue occupancy/utilization and request accounting.
+
+The timeline chart is a time-series view; the authoritative completed-throughput metric remains successful completions divided by total measurement duration. Python visualization runs manually after the C++ benchmark and does not participate in the measured request-processing path. Python 3 and Matplotlib are required; the exact installed versions should be recorded for reproducibility.
 
 ## Validation
 
@@ -163,13 +189,14 @@ WinTask's validation suite contains **40 consolidated test cases** covering:
 - Queue saturation, load shedding and accounting consistency.
 - Synthetic job handlers and request-state semantics.
 - Windows timing, processor affinity and diagnostics.
-- Performance and scalability workloads.
+- Dual-CSV schema, run identity, accounting and offline visualization validation.
+- Performance and scalability workloads, including queue-specific latency percentiles.
 
 The companion `Test Case Specification & Execution Record.md` defines the procedures, expected results and execution-status fields. Tests are initially pending and must not be represented as passed until actually executed.
 
 ## Benchmarking
 
-The benchmark evaluates request volume, completed throughput, ingress-to-terminal latency, priority-distribution sensitivity and AVX2-assisted slot transfer against a correctness-equivalent reference path.
+The benchmark evaluates request volume, completed throughput, ingress-to-terminal latency, priority-distribution sensitivity and AVX2-assisted slot transfer against a correctness-equivalent reference path. Each completed run produces `BenchmarkResults.csv` and `BenchmarkSummary.csv`. `Visualizer.py` performs offline validation and derives High, Medium, Low and Overall latency distributions, including P50, P90, P95 and P99.
 
 The primary throughput measure is:
 
@@ -189,10 +216,13 @@ A workload that is merely offered or accepted is not evidence of completed throu
 - The 300–700 ns processing estimate is provisional and must be measured rather than assumed.
 - The 64-byte cache-line assumption and processor-affinity mapping are specific to the target-machine evaluation configuration.
 - The million-requests-per-second objective is not a guaranteed capability.
+- `Visualizer.py` performs offline analysis only; it is not a live dashboard and does not affect request processing.
+- Successful-service latency percentiles exclude failed requests; failures remain included in request accounting and per-request terminal records.
+- The completion timeline is a visualization of time-windowed completions, not a replacement for the aggregate completed-throughput calculation.
 
 ## Future Development
 
-Potential post-POC work may include further evaluation of cache-line ownership strategies, alternative queue and scheduling policies, improved memory management, additional workload types and investigation of whether the independently useful queue or execution components can be adapted for PDSTL. Such work is outside the current proof-of-concept acceptance scope unless explicitly added through a later design revision.
+Potential post-POC work may include further evaluation of cache-line ownership strategies, alternative queue and scheduling policies, improved memory management, additional workload types and investigation of whether the independently useful queue or execution components can be adapted for other applications. Such work is outside the current proof-of-concept acceptance scope unless explicitly added through a later design revision.
 
 ## Disclaimer
 
