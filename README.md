@@ -1,10 +1,8 @@
-# WinTask
-
-**High-Performance Priority-Based Task Scheduler & Processor for Windows**
+# WinTask: A High-Performance Priority-Based Task Scheduler & Processor for Windows**
 
 WinTask is a Windows-native C++ proof-of-concept that explores high-throughput request ingestion, priority-based dispatch, bounded queue management and concurrent task processing. It models a server-oriented workload using one dedicated ingestor, three independent priority queues and three dedicated consumer threads. The project focuses on predictable resource usage, compact request representation, producer-consumer synchronization, processor affinity, cache-aware data placement, SIMD-assisted ingestion experiments, overload handling and measurable request-processing performance.
 
-> **Performance objective:** WinTask uses **1,000,000 successfully completed requests per second** as a stretch target for a defined synthetic workload on the project machine. This is an objective to measure, not a guaranteed result or an established benchmark claim.
+**Performance objective:** WinTask uses **1,000,000 successfully completed requests per second** as a stretch target for a defined synthetic workload on the project machine. This is an objective to measure, not a guaranteed result or an established benchmark claim.
 
 ## Objectives
 
@@ -75,7 +73,9 @@ The proof of concept includes three controlled job types:
 - `TELEMETRY_LOG` — bounded synthetic telemetry-processing work.
 - `COMPUTE_SIGN` — deterministic bit-mixing and rotation work over a 64-bit input.
 
-These handlers provide representative processing workloads. The signature transformation is not cryptographic verification and does not provide security or authentication. Ingress timestamps are captured using the Windows high-resolution performance counter. Per-consumer diagnostics storage is preallocated and isolated by consumer. After accepted work has drained and consumers have terminated, the benchmark exports `BenchmarkResults.csv` (per-request terminal records) and `BenchmarkSummary.csv` (Overall and per-queue counters, occupancy, timing and environment metadata). The offline `Visualizer.py` utility consumes both files, validates their run identity and accounting, calculates latency statistics including P50/P90/P95/P99 independently for High, Medium and Low, and generates the visualization outputs. Completed throughput is calculated from successfully completed requests divided by the measurement interval. Offered, accepted, completed, failed, invalid and capacity-rejected requests are distinguished in the reported results.
+These handlers provide representative processing workloads. The signature transformation is not cryptographic verification and does not provide security or authentication. Ingress timestamps are captured using the Windows high-resolution performance counter. Per-consumer diagnostics storage is preallocated and isolated by consumer. 
+
+After accepted work has drained and consumers have terminated, the benchmark exports `BenchmarkResults.csv` (per-request terminal records) and `BenchmarkSummary.csv` (Overall and per-queue counters, occupancy, timing and environment metadata). The offline `Visualizer.py` utility consumes both files, validates their run identity and accounting, calculates latency statistics including P50/P90/P95/P99 independently for High, Medium and Low, and generates the visualization outputs. Completed throughput is calculated from successfully completed requests divided by the measurement interval. Offered, accepted, completed, failed, invalid and capacity-rejected requests are distinguished in the reported results.
 
 ## Architecture
 
@@ -128,11 +128,11 @@ The interface coordinates the selected operation; request ingestion, queue manag
 
 ## System Requirements
 
-- Windows x64.
+- Windows 10/11 x64.
 - A processor and operating-system configuration compatible with the project's AVX2 benchmark path.
-- Sufficient available memory for the 40 MiB queue storage and additional runtime/diagnostics allocations.
-- Python 3 and Matplotlib for offline execution of `Visualizer.py`.
-- A CPU topology that supports the configured thread-affinity arrangement on the project machine.
+- Sufficient available memory for the 40 MiB queue storage and additional runtime/diagnostics allocations (8GB).
+- Python 3.15 and Matplotlib for offline execution of `Visualizer.py`.
+- A CPU topology that supports the configured thread-affinity arrangement on the project machine (At least a 6 Core CPU).
 
 The target machine's processor model, logical-processor mapping, Windows build and available memory should be recorded with benchmark results.
 
@@ -144,7 +144,7 @@ The planned primary toolchain is:
 - **Target:** `x86_64-pc-windows-msvc`.
 - **Standard library:** Microsoft STL.
 - **Build environment:** Microsoft Build Tools for Visual Studio 2026.
-- **Language baseline:** C++20; C++23 features may be used where explicitly supported and beneficial.
+- **Language baseline:** C++26
 - **SIMD target:** AVX2 for the request-slot transfer experiment on the project machine.
 
 GCC 16.1 is not part of WinTask's primary compiler configuration. Exact build commands and compiler options will be documented with the finalized build configuration; they should not be inferred from this conceptual project overview.
@@ -202,7 +202,7 @@ The primary throughput measure is:
 
 **Successfully completed requests / measurement duration in seconds.**
 
-A workload that is merely offered or accepted is not evidence of completed throughput. Benchmark reports should include workload distribution, run duration, build configuration, CPU information, affinity mapping and accepted/completed/rejected counts. Results should be repeated and interpreted in the context of the target machine and workload. The 1,000,000 requests/second figure is a stretch target. WinTask does not claim to have achieved it until a valid benchmark run demonstrates it.
+The 1,000,000 requests/second figure is a stretch target. WinTask does not claim to have achieved it until a valid benchmark run demonstrates it.
 
 ## Current Limitations
 
