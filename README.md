@@ -1,4 +1,4 @@
-# WinTask: A High-Performance Priority-Based Task Scheduler & Processor for Windows**
+# WinTask: A High-Performance Priority-Based Task Scheduler & Processor for Windows
 
 WinTask is a Windows-native C++ proof-of-concept that explores high-throughput request ingestion, priority-based dispatch, bounded queue management and concurrent task processing. It models a server-oriented workload using one dedicated ingestor, three independent priority queues and three dedicated consumer threads. The project focuses on predictable resource usage, compact request representation, producer-consumer synchronization, processor affinity, cache-aware data placement, SIMD-assisted ingestion experiments, overload handling and measurable request-processing performance.
 
